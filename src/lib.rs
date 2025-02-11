@@ -107,7 +107,10 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 state.rend.prepare();
-                let queue = state.rend.queue.clone();
+                let output = state.rend.surface.get_current_texture().unwrap();
+                let view = output
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
                 let mut encoder =
                     state
                         .rend
@@ -118,14 +121,27 @@ impl ApplicationHandler for App {
                 {
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("wgputris.render_pass"),
-                        color_attachments: &[],
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color {
+                                    r: 0.1,
+                                    g: 0.2,
+                                    b: 0.3,
+                                    a: 1.0,
+                                }),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
                     });
                     state.rend.render(&mut render_pass);
                 }
-                queue.submit([encoder.finish()]);
+                state.rend.queue.submit([encoder.finish()]);
+                output.present();
                 state.get_window().request_redraw();
             }
             WindowEvent::Resized(size) => {

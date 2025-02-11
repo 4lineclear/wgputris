@@ -8,7 +8,7 @@ pub struct QRend {
     quads: Vec<Quad>,
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
-    surface: wgpu::Surface<'static>,
+    pub surface: wgpu::Surface<'static>,
     surface_format: wgpu::TextureFormat,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
