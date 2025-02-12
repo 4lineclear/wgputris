@@ -1,6 +1,10 @@
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+// TODO: create layered rendering
+
+pub mod layer;
+
 #[derive(Debug)]
 pub struct QRend {
     size: ScreenSize,
@@ -113,7 +117,6 @@ impl QRend {
         if self.vertex_buffer.size() == 0 {
             return;
         }
-        // log::info!("rendering, vertices: {vertices}");
         let vertices = 6 * self.quads.len() as u32;
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.uniform_bind, &[]);
@@ -190,6 +193,9 @@ fn uniform_binding(
     });
     (uniform_bind, uniform_layout, uniform_buffer)
 }
+
+pub const VERTEX_PER_QUAD: usize = 6;
+pub const BYTES_PER_QUAD: usize = VERTEX_PER_QUAD * std::mem::size_of::<Vertex>();
 
 impl Vertex {
     const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array!(

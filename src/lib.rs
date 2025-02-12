@@ -54,7 +54,7 @@ impl State {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
-        let game = Game::default();
+        let game = Game::new();
         let mut rend = rend::QRend::new(
             size.into(),
             device,
@@ -88,6 +88,20 @@ impl State {
             self.rend.resize(new_size.into());
         }
     }
+
+    fn handle_key(&self, event: winit::event::KeyEvent) {
+        use winit::keyboard::KeyCode::*;
+        let winit::keyboard::PhysicalKey::Code(key_code) = event.physical_key else {
+            return;
+        };
+        match key_code {
+            ArrowLeft => {}
+            ArrowRight => {}
+            ArrowUp => {}
+            ArrowDown => {}
+            _ => (),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -103,10 +117,7 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
         window.set_maximized(true);
-
-        let state = pollster::block_on(State::new(window.clone()));
-        self.state = Some(state);
-
+        self.state = Some(pollster::block_on(State::new(window.clone())));
         window.request_redraw();
     }
 
@@ -156,6 +167,9 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Resized(size) => {
                 state.resize(size); // always followed by a redraw request
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                state.handle_key(event);
             }
             _ => (),
         }

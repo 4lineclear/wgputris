@@ -70,7 +70,6 @@ impl Sizing {
         let board_height = (self.block_gap + self.block_size) * n_tall;
         self.game_x = (width / 2).saturating_sub(board_width / 2);
         self.game_y = (height / 2).saturating_sub(board_height / 2);
-        log::info!("{self:#?}");
     }
 }
 
@@ -80,7 +79,7 @@ impl Default for Settings {
             styling: Styling {
                 fg: colours::WHITE,
                 bg: colours::WHITE,
-                e: colours::WHITE,
+                e: colours::SILVER,
                 i: colours::WHITE,
                 t: colours::WHITE,
                 o: colours::WHITE,

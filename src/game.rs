@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 /// A point on the board
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Point {
@@ -17,12 +19,24 @@ impl From<(u8, u8)> for Point {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Game {
+    start: Instant,
     board: Board,
 }
 
 impl Game {
+    pub fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            board: Board::default(),
+        }
+    }
+
+    pub fn start(&mut self) {
+        self.start = Instant::now()
+    }
+
     pub fn board(&self) -> Board {
         self.board
     }
