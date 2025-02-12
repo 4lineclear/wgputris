@@ -5,7 +5,10 @@ use winit::event_loop::{ControlFlow, EventLoop};
 // grow meshes by iterating over the void-like.
 
 fn main() {
-    env_logger::init(); // NOTE: can't use tracing, must use log
+    // for some reason setting env vars doesn't work when compiling for windows
+    // std::env::set_var("RUST_BACKTRACE", "full");
+    std::env::set_var("RUST_LOG", "wgputris=info,wgpu=error");
+    env_logger::init_from_env(env_logger::Env::new()); // NOTE: can't use tracing, must use log
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll); // fast rendering
     let mut app = wgputris::App::default();

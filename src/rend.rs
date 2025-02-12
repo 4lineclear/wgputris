@@ -4,7 +4,6 @@ use wgpu::util::DeviceExt;
 #[derive(Debug)]
 pub struct QRend {
     size: ScreenSize,
-    bounds: Quad,
     quads: Vec<Quad>,
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
@@ -50,10 +49,11 @@ fn gen_buffers(device: &wgpu::Device, quads: &[Quad]) -> wgpu::Buffer {
     vertex_buffer
 }
 
+const UNIFORM_SIZE: std::num::NonZero<u64> =
+    wgpu::BufferSize::new(std::mem::size_of::<ScreenSize>() as u64).unwrap();
 impl QRend {
     pub fn new(
         size: ScreenSize,
-        bounds: Quad,
         device: wgpu::Device,
         queue: wgpu::Queue,
         format: wgpu::TextureFormat,
@@ -69,10 +69,8 @@ impl QRend {
         });
         let (uniform_bind, uniform_layout) = uniform_binding(&device, &uniform_buffer);
         let pipeline = create_pipeline(&device, format, uniform_layout);
-        println!("here");
         Self {
             size,
-            bounds,
             quads,
             queue,
             device,
@@ -103,11 +101,7 @@ impl QRend {
     pub fn resize(&mut self, size: ScreenSize) {
         let bytes = bytemuck::bytes_of(&size);
         self.queue
-            .write_buffer_with(
-                &self.vertex_buffer,
-                0,
-                wgpu::BufferSize::new(bytes.len() as u64).expect("invalid byte length"),
-            )
+            .write_buffer_with(&self.uniform_buffer, 0, UNIFORM_SIZE)
             .expect("invalid quad buffer size")
             .copy_from_slice(&bytes);
         self.size = size;
@@ -115,17 +109,12 @@ impl QRend {
     }
 
     pub fn render(&mut self, render_pass: &mut wgpu::RenderPass) {
-        render_pass.set_scissor_rect(
-            self.bounds.x,
-            self.bounds.y,
-            self.bounds.width,
-            self.bounds.height,
-        );
-
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.uniform_bind, &[]);
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.draw(0..(self.quads.len() as u32), 0..1);
+        if self.vertex_buffer.size() != 0 {
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.draw(0..(self.quads.len() as u32), 0..1);
+        }
     }
 
     pub fn push(&mut self, quad: Quad) {
@@ -149,15 +138,12 @@ impl QRend {
                 .expect("invalid quad buffer size")
                 .copy_from_slice(bytes);
         }
-        write_bytes(
-            &self.queue,
-            &self.uniform_buffer,
-            bytemuck::bytes_of(&self.size),
-        );
         if self.vertex_cap < self.quads.len() {
+            log::info!("changing vertex");
             self.vertex_buffer = gen_buffers(&self.device, &self.quads);
             self.vertex_cap = self.quads.len();
-        } else {
+        } else if self.vertex_buffer.size() != 0 {
+            log::info!("writing vertex");
             write_bytes(
                 &self.queue,
                 &self.vertex_buffer,
@@ -165,10 +151,6 @@ impl QRend {
             );
             self.queue.submit([]);
         }
-    }
-
-    pub fn set_bounds(&mut self, bounds: Quad) {
-        self.bounds = bounds;
     }
 }
 
@@ -184,7 +166,7 @@ fn uniform_binding(
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: None,
+                min_binding_size: Some(UNIFORM_SIZE),
             },
             count: None,
         }],

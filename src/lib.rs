@@ -50,21 +50,7 @@ impl State {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
-        let rend = rend::QRend::new(
-            size.into(),
-            rend::Quad {
-                color: [0.0; 4],
-                x: 0,
-                y: 0,
-                width: size.width,
-                height: size.height,
-            },
-            device,
-            queue,
-            surface_format,
-            surface,
-            0,
-        );
+        let rend = rend::QRend::new(size.into(), device, queue, surface_format, surface, 0);
         rend.configure_surface();
         State {
             game: Game::default(),
@@ -131,9 +117,9 @@ impl ApplicationHandler for App {
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 0.1,
-                                    g: 0.2,
-                                    b: 0.3,
+                                    r: 0.0,
+                                    g: 0.0,
+                                    b: 0.0,
                                     a: 1.0,
                                 }),
                                 store: wgpu::StoreOp::Store,
