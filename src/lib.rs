@@ -50,11 +50,9 @@ impl State {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
-        let rend = rend::QRend::new(size.into(), device, queue, surface_format, surface, 0);
-        rend.configure_surface();
         State {
             game: Game::default(),
-            rend,
+            rend: rend::QRend::new(size.into(), device, queue, surface_format, surface, 0),
             window,
         }
     }
@@ -109,8 +107,9 @@ impl ApplicationHandler for App {
                         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                             label: Some("command encoder"),
                         });
-                {
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                state
+                    .rend
+                    .render(&mut encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("wgputris.render_pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: &view,
@@ -128,9 +127,7 @@ impl ApplicationHandler for App {
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
-                    });
-                    state.rend.render(&mut render_pass);
-                }
+                    }));
                 state.rend.queue.submit([encoder.finish()]);
                 output.present();
                 state.get_window().request_redraw();

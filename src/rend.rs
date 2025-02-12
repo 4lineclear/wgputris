@@ -5,6 +5,8 @@ use wgpu::util::DeviceExt;
 pub struct QRend {
     size: ScreenSize,
     quads: Vec<Quad>,
+    quad_cap: usize,
+    // TODO: seperate buffers, rendering, and other wgpu
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub surface: wgpu::Surface<'static>,
@@ -12,7 +14,6 @@ pub struct QRend {
     vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     uniform_bind: wgpu::BindGroup,
-    vertex_cap: usize,
     pipeline: wgpu::RenderPipeline,
 }
 
@@ -24,6 +25,14 @@ pub struct Quad {
     pub y: u32,
     pub width: u32,
     pub height: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
+pub struct Vertex {
+    pub color: [f32; 4],
+    pub x: u32,
+    pub y: u32,
 }
 
 #[repr(C)]
@@ -43,7 +52,7 @@ impl From<winit::dpi::PhysicalSize<u32>> for ScreenSize {
 fn gen_buffers(device: &wgpu::Device, quads: &[Quad]) -> wgpu::Buffer {
     let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("wgputris.qrend.vertex_buffer"),
-        contents: bytemuck::cast_slice(quads),
+        contents: bytemuck::cast_slice(&Vertex::from_quads(quads)),
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
     });
     vertex_buffer
@@ -60,28 +69,48 @@ impl QRend {
         surface: wgpu::Surface<'static>,
         count: usize,
     ) -> Self {
-        let quads = Vec::new();
+        let quads = vec![
+            Quad {
+                color: [1.0, 1.0, 1.0, 1.0],
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+            Quad {
+                color: [1.0, 1.0, 1.0, 1.0],
+                x: 100,
+                y: 100,
+                width: 100,
+                height: 100,
+            },
+            Quad {
+                color: [1.0, 1.0, 1.0, 1.0],
+                x: 200,
+                y: 200,
+                width: 100,
+                height: 100,
+            },
+        ];
+        let quad_cap = count.max(quads.len());
         let vertex_buffer = gen_buffers(&device, &quads);
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("wgputris.qrend.uniform.buffer"),
-            contents: bytemuck::bytes_of(&size),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let (uniform_bind, uniform_layout) = uniform_binding(&device, &uniform_buffer);
+        let (uniform_bind, uniform_layout, uniform_buffer) = uniform_binding(&device, size);
         let pipeline = create_pipeline(&device, format, uniform_layout);
-        Self {
+        let this = Self {
             size,
             quads,
             queue,
             device,
             surface,
             surface_format: format,
-            vertex_cap: count,
+            quad_cap,
             vertex_buffer,
             uniform_buffer,
             uniform_bind,
             pipeline,
-        }
+        };
+        this.configure_surface();
+        this
     }
 
     pub fn configure_surface(&self) {
@@ -109,12 +138,15 @@ impl QRend {
     }
 
     pub fn render(&mut self, render_pass: &mut wgpu::RenderPass) {
+        if self.vertex_buffer.size() == 0 {
+            return;
+        }
+        // log::info!("rendering, vertices: {vertices}");
+        let vertices = 6 * self.quads.len() as u32;
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.uniform_bind, &[]);
-        if self.vertex_buffer.size() != 0 {
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.draw(0..(self.quads.len() as u32), 0..1);
-        }
+        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        render_pass.draw(0..vertices, 0..1);
     }
 
     pub fn push(&mut self, quad: Quad) {
@@ -128,27 +160,22 @@ impl QRend {
     }
 
     pub fn prepare(&mut self) {
-        fn write_bytes(queue: &wgpu::Queue, buffer: &wgpu::Buffer, bytes: &[u8]) {
-            queue
+        if self.quad_cap < self.quads.len() {
+            // log::info!("changing vertex");
+            self.vertex_buffer = gen_buffers(&self.device, &self.quads);
+            self.quad_cap = self.quads.len();
+        } else if self.vertex_buffer.size() != 0 {
+            // log::info!("writing vertex");
+            let vertices = Vertex::from_quads(&self.quads);
+            let bytes = bytemuck::cast_slice(&vertices);
+            self.queue
                 .write_buffer_with(
-                    buffer,
+                    &self.vertex_buffer,
                     0,
                     wgpu::BufferSize::new(bytes.len() as u64).expect("invalid byte length"),
                 )
                 .expect("invalid quad buffer size")
                 .copy_from_slice(bytes);
-        }
-        if self.vertex_cap < self.quads.len() {
-            log::info!("changing vertex");
-            self.vertex_buffer = gen_buffers(&self.device, &self.quads);
-            self.vertex_cap = self.quads.len();
-        } else if self.vertex_buffer.size() != 0 {
-            log::info!("writing vertex");
-            write_bytes(
-                &self.queue,
-                &self.vertex_buffer,
-                bytemuck::cast_slice(&self.quads),
-            );
             self.queue.submit([]);
         }
     }
@@ -156,13 +183,18 @@ impl QRend {
 
 fn uniform_binding(
     device: &wgpu::Device,
-    uniform_buffer: &wgpu::Buffer,
-) -> (wgpu::BindGroup, wgpu::BindGroupLayout) {
+    size: ScreenSize,
+) -> (wgpu::BindGroup, wgpu::BindGroupLayout, wgpu::Buffer) {
+    let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("wgputris.qrend.uniform.buffer"),
+        contents: bytemuck::bytes_of(&size),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
     let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("wgputris.qrend.uniform.bind_group.layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
+            visibility: wgpu::ShaderStages::all(),
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
@@ -179,23 +211,48 @@ fn uniform_binding(
             resource: uniform_buffer.as_entire_binding(),
         }],
     });
-    (uniform_bind, uniform_layout)
+    (uniform_bind, uniform_layout, uniform_buffer)
 }
 
-impl Quad {
+impl Vertex {
     const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array!(
         // Color
         0 => Float32x4,
         // Position + Size
-        1 => Float32x4,
+        1 => Uint32x2,
     );
 
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
+            step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &Self::ATTRIBS,
         }
+    }
+
+    fn from_quad(
+        &Quad {
+            color,
+            x,
+            y,
+            width,
+            height,
+        }: &Quad,
+    ) -> [Self; 6] {
+        let vertex = |x, y| Vertex { color, x, y };
+        let bl = vertex(x, y + height);
+        let br = vertex(x + width, y + height);
+        let tr = vertex(x + width, y);
+        let tl = vertex(x, y);
+        [tl, bl, br, tr, tl, br]
+    }
+
+    fn from_quads<'a>(quads: &'a [Quad]) -> Vec<Self> {
+        let mut vertices = Vec::with_capacity(quads.len() * 6);
+        for v in quads.iter().map(Self::from_quad) {
+            vertices.extend_from_slice(&v);
+        }
+        vertices
     }
 }
 
@@ -223,7 +280,7 @@ fn create_pipeline(
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
-            buffers: &[Quad::desc()],
+            buffers: &[Vertex::desc()],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {
@@ -236,7 +293,15 @@ fn create_pipeline(
             })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
-        primitive: wgpu::PrimitiveState::default(),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
         depth_stencil: None,
         multisample: wgpu::MultisampleState {
             count: 1,

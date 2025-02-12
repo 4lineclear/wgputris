@@ -1,6 +1,5 @@
 struct Uniforms {
-  width: f32,
-  height: f32,
+  bounds: vec2<u32>,
 };
 
 @group(0) @binding(0)
@@ -8,7 +7,7 @@ var<uniform> uniforms: Uniforms;
 
 struct VertexInput {
   @location(0) color: vec4<f32>, // r,g,b,a
-  @location(1) rect: vec4<f32>,  // x, y, width, height
+  @location(1) pos: vec2<u32>,  // x, y
 };
 
 struct VertexOutput {
@@ -17,11 +16,13 @@ struct VertexOutput {
 };
 
 @vertex
-fn vs_main(@builtin(instance_index) instance_idx: u32, rect: VertexInput) -> VertexOutput {
-  // TODO: turn the position into something real
+fn vs_main(rect: VertexInput) -> VertexOutput {
   var out: VertexOutput;
-  out.position = vec4<f32>(0.0, 0.0, 0.0, 1.0);
-  out.color = rect.color; // Optional, for texturing
+
+  let ndc = ((vec2<f32>(rect.pos) / vec2<f32>(uniforms.bounds)) * 2.0) - vec2<f32>(1.0, 1.0);
+
+  out.position = vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);
+  out.color = rect.color;
   return out;
 }
 
