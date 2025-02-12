@@ -28,8 +28,6 @@ pub struct Rect {
     pub height: u32,
 }
 
-pub const STARTING_VERTEX_COUNT: usize = game::TOTAL_BLOCKS as usize * 6;
-
 impl State {
     pub async fn new(window: Arc<Window>) -> State {
         let size = window.inner_size();
@@ -54,19 +52,17 @@ impl State {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
+        let mut rend = rend::QRend::new(size.into(), device, queue, surface_format, surface);
         let game = Game::new();
-        let mut rend = rend::QRend::new(
-            size.into(),
-            device,
-            queue,
-            surface_format,
-            surface,
-            STARTING_VERTEX_COUNT,
-        );
         let settings = styling::Settings::default();
-        for quad in game_quads(&settings, &game) {
-            rend.push(quad);
-        }
+
+        let mut base_layer = rend.create_layer();
+        let mut game_layer = rend.create_layer();
+
+        write_base_quads(&settings, &game, &mut base_layer, true);
+        write_game_quads(&settings, &game, &mut game_layer, true);
+        rend.push_layer("base", base_layer);
+        rend.push_layer("game", game_layer);
         State {
             game,
             rend,
@@ -84,7 +80,12 @@ impl State {
             self.settings
                 .sizing
                 .resize(&self.game, new_size.width, new_size.height);
-            write_game_quads(&self.settings, &self.game, &mut self.rend.quads);
+            if let Some(layer) = self.rend.get_layer_mut("game") {
+                write_game_quads(&self.settings, &self.game, layer, false);
+            }
+            if let Some(layer) = self.rend.get_layer_mut("base") {
+                write_base_quads(&self.settings, &self.game, layer, false);
+            }
             self.rend.resize(new_size.into());
         }
     }
@@ -176,15 +177,43 @@ impl ApplicationHandler for App {
     }
 }
 
-fn game_quads(settings: &styling::Settings, game: &game::Game) -> Vec<rend::Quad> {
-    // let n_wide = game.board().line(0usize).blocks().len() as u32;
-    // let n_tall = game.board().visible().len() as u32;
-    // let board_width = (block_gap + block_size) * n_wide;
-    // let board_height = (block_gap + block_size) * n_tall;
-    // vec![quad(styling.bg, 0, 0, board_width, board_height)]
-    let mut quads = vec![rend::Quad::default(); 200];
-    write_game_quads(settings, game, &mut quads[..]);
-    quads
+fn quad(colour: styling::Colour, x: u32, y: u32, width: u32, height: u32) -> rend::Quad {
+    rend::Quad {
+        colour: colour.rgba(),
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+fn write_base_quads(
+    styling::Settings {
+        styling,
+        sizing:
+            styling::Sizing {
+                game_x,
+                game_y,
+                block_size,
+                block_gap,
+            },
+    }: &styling::Settings,
+    game: &Game,
+    base_layer: &mut rend::Layer,
+    push: bool,
+) {
+    let quad = quad(
+        styling.bg,
+        *game_x,
+        *game_y,
+        (block_size + block_gap) * game.board().line(0).blocks().len() as u32,
+        (block_size + block_gap) * game.board().visible().len() as u32,
+    );
+    if push {
+        base_layer.push(quad);
+    } else {
+        base_layer.set(0, quad);
+    }
 }
 
 fn write_game_quads(
@@ -199,17 +228,9 @@ fn write_game_quads(
             },
     }: &styling::Settings,
     game: &game::Game,
-    quads: &mut [rend::Quad],
+    game_layer: &mut rend::Layer,
+    push: bool,
 ) {
-    fn quad(colour: styling::Colour, x: u32, y: u32, width: u32, height: u32) -> rend::Quad {
-        rend::Quad {
-            colour: colour.rgba(),
-            x,
-            y,
-            width,
-            height,
-        }
-    }
     let mut i = 0;
     let mut cx = *game_x;
     let mut cy = *game_y;
@@ -217,7 +238,12 @@ fn write_game_quads(
         cy += block_gap;
         for &b in line.blocks() {
             cx += block_gap;
-            quads[i] = quad(styling.colour_block(b), cx, cy, *block_size, *block_size);
+            let quad = quad(styling.colour_block(b), cx, cy, *block_size, *block_size);
+            if push {
+                game_layer.push(quad);
+            } else {
+                game_layer.set(i, quad);
+            }
             cx += block_size;
             i += 1;
         }

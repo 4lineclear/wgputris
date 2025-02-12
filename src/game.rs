@@ -60,12 +60,12 @@ impl Board {
     pub fn origin(&self) -> Point {
         Point::new(0, 23)
     }
-    pub fn line(&self, y: impl Into<usize>) -> Line {
-        self.0[y.into()]
+    pub fn line(&self, y: usize) -> Line {
+        self.0[y]
     }
     pub fn block(&self, point: impl Into<Point>) -> Option<Block> {
         let Point { x, y } = point.into();
-        self.line(y).block(x)
+        self.line(y as usize).block(x)
     }
 }
 

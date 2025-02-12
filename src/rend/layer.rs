@@ -23,7 +23,8 @@ impl Layer {
         if !self.changed {
             return;
         }
-        let contents = bytemuck::cast_slice(&self.quads);
+        let vertices = super::Vertex::from_quads(&self.quads);
+        let contents = bytemuck::cast_slice(&vertices);
         let byte_len = contents.len();
         if self.byte_cap < byte_len {
             self.buffer = create_buffer(self.label, device, byte_len);
@@ -33,6 +34,23 @@ impl Layer {
         {
             size.copy_from_slice(contents);
         }
+    }
+
+    pub fn byte_cap(&self) -> usize {
+        self.byte_cap
+    }
+
+    pub fn len(&self) -> usize {
+        self.quads.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.quads.is_empty()
+    }
+
+    pub fn set(&mut self, i: usize, quad: super::Quad) {
+        self.changed = true;
+        self.quads[i] = quad;
     }
 
     pub fn push(&mut self, quad: super::Quad) {
@@ -49,9 +67,14 @@ impl Layer {
         &self.buffer
     }
 
+    pub fn vertices(&self) -> usize {
+        self.quads.len() * super::VERTICES_PER_QUAD
+    }
+
     pub fn with_quads(label: &'static str, device: &wgpu::Device, quads: Vec<super::Quad>) -> Self {
         use wgpu::util::DeviceExt;
-        let contents = bytemuck::cast_slice(&quads);
+        let vertices = super::Vertex::from_quads(&quads);
+        let contents = bytemuck::cast_slice(&vertices);
         let byte_cap = contents.len();
         Self {
             label,

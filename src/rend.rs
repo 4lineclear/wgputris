@@ -1,28 +1,26 @@
+use std::collections::HashMap;
+
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
-// TODO: create layered rendering
+pub use self::layer::Layer;
 
 pub mod layer;
 
 #[derive(Debug)]
 pub struct QRend {
     size: ScreenSize,
-    pub quads: Vec<Quad>,
-    quad_cap: usize,
-    // TODO: seperate buffers, rendering, and other wgpu
+    layers: HashMap<&'static str, Layer>,
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub surface: wgpu::Surface<'static>,
     surface_format: wgpu::TextureFormat,
-    vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     uniform_bind: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
 }
 
-#[repr(C)]
-#[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct Quad {
     pub colour: [f32; 4],
     pub x: u32,
@@ -61,26 +59,16 @@ impl QRend {
         queue: wgpu::Queue,
         format: wgpu::TextureFormat,
         surface: wgpu::Surface<'static>,
-        count: usize,
     ) -> Self {
-        let quad_cap = count * 6 * std::mem::size_of::<Vertex>();
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("wgputris.qrend.vertex_buffer"),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            size: quad_cap as u64,
-            mapped_at_creation: false,
-        });
         let (uniform_bind, uniform_layout, uniform_buffer) = uniform_binding(&device, size);
         let pipeline = create_pipeline(&device, format, uniform_layout);
         let this = Self {
             size,
-            quads: Vec::new(),
+            layers: HashMap::new(),
             queue,
             device,
             surface,
             surface_format: format,
-            quad_cap,
-            vertex_buffer,
             uniform_buffer,
             uniform_bind,
             pipeline,
@@ -114,49 +102,42 @@ impl QRend {
     }
 
     pub fn render(&mut self, render_pass: &mut wgpu::RenderPass) {
-        if self.vertex_buffer.size() == 0 {
-            return;
-        }
-        let vertices = 6 * self.quads.len() as u32;
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.uniform_bind, &[]);
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.draw(0..vertices, 0..1);
+        self.layers
+            .values()
+            .filter(|l| !l.is_empty())
+            .for_each(|layer| {
+                render_pass.set_vertex_buffer(0, layer.buffer().slice(..));
+                render_pass.draw(0..layer.vertices() as u32, 0..1);
+            });
     }
 
-    pub fn push(&mut self, quad: Quad) {
-        self.quads.push(quad);
+    pub fn create_layer(&self) -> Layer {
+        Layer::new("wgputris.rend.layer", &self.device, 0)
     }
 
-    pub fn set(&mut self, index: usize, quad: Quad) {
-        if let Some(q) = self.quads.get_mut(index) {
-            *q = quad;
+    pub fn push_layer(&mut self, label: &'static str, layer: Layer) {
+        self.layers.insert(label, layer);
+    }
+
+    pub fn get_layer_mut(&mut self, label: &'static str) -> Option<&mut Layer> {
+        self.layers.get_mut(label)
+    }
+
+    pub fn push(&mut self, label: &'static str, quad: Quad) {
+        if let Some(layer) = self.layers.get_mut(label) {
+            layer.push(quad);
+        } else {
+            let mut layer = Layer::new("wgputris.rend.layer", &self.device, 0);
+            layer.push(quad);
+            self.push_layer(label, layer);
         }
     }
 
     pub fn prepare(&mut self) {
-        if self.quad_cap * 6 * std::mem::size_of::<Vertex>() < self.quads.len() {
-            self.vertex_buffer =
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("wgputris.qrend.vertex_buffer"),
-                        contents: bytemuck::cast_slice(&Vertex::from_quads(&self.quads)),
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    });
-            self.quad_cap = self.quads.len() * 6 * std::mem::size_of::<Vertex>();
-        } else {
-            // log::info!("writing vertex");
-            let vertices = Vertex::from_quads(&self.quads);
-            let bytes = bytemuck::cast_slice(&vertices);
-            self.queue
-                .write_buffer_with(
-                    &self.vertex_buffer,
-                    0,
-                    wgpu::BufferSize::new(bytes.len() as u64).expect("invalid byte length"),
-                )
-                .expect("invalid quad buffer size")
-                .copy_from_slice(bytes);
-            self.queue.submit([]);
+        for (_, layer) in &mut self.layers {
+            layer.prepare(&self.device, &self.queue);
         }
     }
 }
@@ -194,8 +175,8 @@ fn uniform_binding(
     (uniform_bind, uniform_layout, uniform_buffer)
 }
 
-pub const VERTEX_PER_QUAD: usize = 6;
-pub const BYTES_PER_QUAD: usize = VERTEX_PER_QUAD * std::mem::size_of::<Vertex>();
+pub const VERTICES_PER_QUAD: usize = 6;
+pub const BYTES_PER_QUAD: usize = VERTICES_PER_QUAD * std::mem::size_of::<Vertex>();
 
 impl Vertex {
     const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array!(
