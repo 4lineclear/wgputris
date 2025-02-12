@@ -4,7 +4,7 @@ use wgpu::util::DeviceExt;
 #[derive(Debug)]
 pub struct QRend {
     size: ScreenSize,
-    quads: Vec<Quad>,
+    pub quads: Vec<Quad>,
     quad_cap: usize,
     // TODO: seperate buffers, rendering, and other wgpu
     pub queue: wgpu::Queue,
@@ -20,7 +20,7 @@ pub struct QRend {
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
 pub struct Quad {
-    pub color: [f32; 4],
+    pub colour: [f32; 4],
     pub x: u32,
     pub y: u32,
     pub width: u32,
@@ -48,16 +48,6 @@ impl From<winit::dpi::PhysicalSize<u32>> for ScreenSize {
     }
 }
 
-/// vertex, index, instance
-fn gen_buffers(device: &wgpu::Device, quads: &[Quad]) -> wgpu::Buffer {
-    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("wgputris.qrend.vertex_buffer"),
-        contents: bytemuck::cast_slice(&Vertex::from_quads(quads)),
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-    });
-    vertex_buffer
-}
-
 const UNIFORM_SIZE: std::num::NonZero<u64> =
     wgpu::BufferSize::new(std::mem::size_of::<ScreenSize>() as u64).unwrap();
 impl QRend {
@@ -69,36 +59,18 @@ impl QRend {
         surface: wgpu::Surface<'static>,
         count: usize,
     ) -> Self {
-        let quads = vec![
-            Quad {
-                color: [1.0, 1.0, 1.0, 1.0],
-                x: 0,
-                y: 0,
-                width: 100,
-                height: 100,
-            },
-            Quad {
-                color: [1.0, 1.0, 1.0, 1.0],
-                x: 100,
-                y: 100,
-                width: 100,
-                height: 100,
-            },
-            Quad {
-                color: [1.0, 1.0, 1.0, 1.0],
-                x: 200,
-                y: 200,
-                width: 100,
-                height: 100,
-            },
-        ];
-        let quad_cap = count.max(quads.len());
-        let vertex_buffer = gen_buffers(&device, &quads);
+        let quad_cap = count * 6 * std::mem::size_of::<Vertex>();
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("wgputris.qrend.vertex_buffer"),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            size: quad_cap as u64,
+            mapped_at_creation: false,
+        });
         let (uniform_bind, uniform_layout, uniform_buffer) = uniform_binding(&device, size);
         let pipeline = create_pipeline(&device, format, uniform_layout);
         let this = Self {
             size,
-            quads,
+            quads: Vec::new(),
             queue,
             device,
             surface,
@@ -160,11 +132,16 @@ impl QRend {
     }
 
     pub fn prepare(&mut self) {
-        if self.quad_cap < self.quads.len() {
-            // log::info!("changing vertex");
-            self.vertex_buffer = gen_buffers(&self.device, &self.quads);
-            self.quad_cap = self.quads.len();
-        } else if self.vertex_buffer.size() != 0 {
+        if self.quad_cap * 6 * std::mem::size_of::<Vertex>() < self.quads.len() {
+            self.vertex_buffer =
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("wgputris.qrend.vertex_buffer"),
+                        contents: bytemuck::cast_slice(&Vertex::from_quads(&self.quads)),
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    });
+            self.quad_cap = self.quads.len() * 6 * std::mem::size_of::<Vertex>();
+        } else {
             // log::info!("writing vertex");
             let vertices = Vertex::from_quads(&self.quads);
             let bytes = bytemuck::cast_slice(&vertices);
@@ -232,7 +209,7 @@ impl Vertex {
 
     fn from_quad(
         &Quad {
-            color,
+            colour: color,
             x,
             y,
             width,

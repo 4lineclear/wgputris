@@ -1,5 +1,6 @@
 pub mod game;
 pub mod rend;
+pub mod styling;
 
 use std::sync::Arc;
 
@@ -16,6 +17,7 @@ pub struct State {
     game: Game,
     rend: rend::QRend,
     window: Arc<Window>,
+    settings: styling::Settings,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -25,6 +27,8 @@ pub struct Rect {
     pub width: u32,
     pub height: u32,
 }
+
+pub const STARTING_VERTEX_COUNT: usize = game::TOTAL_BLOCKS as usize * 6;
 
 impl State {
     pub async fn new(window: Arc<Window>) -> State {
@@ -50,10 +54,24 @@ impl State {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
+        let game = Game::default();
+        let mut rend = rend::QRend::new(
+            size.into(),
+            device,
+            queue,
+            surface_format,
+            surface,
+            STARTING_VERTEX_COUNT,
+        );
+        let settings = styling::Settings::default();
+        for quad in game_quads(&settings, &game) {
+            rend.push(quad);
+        }
         State {
-            game: Game::default(),
-            rend: rend::QRend::new(size.into(), device, queue, surface_format, surface, 0),
+            game,
+            rend,
             window,
+            settings,
         }
     }
 
@@ -63,6 +81,10 @@ impl State {
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
+            self.settings
+                .sizing
+                .resize(&self.game, new_size.width, new_size.height);
+            write_game_quads(&self.settings, &self.game, &mut self.rend.quads);
             self.rend.resize(new_size.into());
         }
     }
@@ -137,5 +159,55 @@ impl ApplicationHandler for App {
             }
             _ => (),
         }
+    }
+}
+
+fn game_quads(settings: &styling::Settings, game: &game::Game) -> Vec<rend::Quad> {
+    // let n_wide = game.board().line(0usize).blocks().len() as u32;
+    // let n_tall = game.board().visible().len() as u32;
+    // let board_width = (block_gap + block_size) * n_wide;
+    // let board_height = (block_gap + block_size) * n_tall;
+    // vec![quad(styling.bg, 0, 0, board_width, board_height)]
+    let mut quads = vec![rend::Quad::default(); 200];
+    write_game_quads(settings, game, &mut quads[..]);
+    quads
+}
+
+fn write_game_quads(
+    styling::Settings {
+        styling,
+        sizing:
+            styling::Sizing {
+                game_x,
+                game_y,
+                block_size,
+                block_gap,
+            },
+    }: &styling::Settings,
+    game: &game::Game,
+    quads: &mut [rend::Quad],
+) {
+    fn quad(colour: styling::Colour, x: u32, y: u32, width: u32, height: u32) -> rend::Quad {
+        rend::Quad {
+            colour: colour.rgba(),
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+    let mut i = 0;
+    let mut cx = *game_x;
+    let mut cy = *game_y;
+    for line in game.board().visible() {
+        cy += block_gap;
+        for &b in line.blocks() {
+            cx += block_gap;
+            quads[i] = quad(styling.colour_block(b), cx, cy, *block_size, *block_size);
+            cx += block_size;
+            i += 1;
+        }
+        cy += block_size;
+        cx = *game_x;
     }
 }

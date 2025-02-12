@@ -57,9 +57,12 @@ impl Board {
 
 /// A single line
 #[derive(Debug, Default, Clone, Copy)]
-pub struct Line([Option<Block>; 20]);
+pub struct Line([Option<Block>; BOARD_WIDTH as usize]);
 
 impl Line {
+    pub fn blocks(&self) -> &[Option<Block>] {
+        &self.0
+    }
     pub fn block(&self, x: impl Into<usize>) -> Option<Block> {
         self.0[x.into()]
     }
