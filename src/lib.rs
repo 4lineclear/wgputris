@@ -31,15 +31,18 @@ impl State {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
+        let surface = instance.create_surface(window.clone()).unwrap();
         let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                compatible_surface: Some(&surface),
+                ..Default::default()
+            })
             .await
             .unwrap();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default(), None)
             .await
             .unwrap();
-        let surface = instance.create_surface(window.clone()).unwrap();
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
             .formats
@@ -75,7 +78,9 @@ impl State {
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        self.rend.resize(new_size.into());
+        if new_size.width > 0 && new_size.height > 0 {
+            self.rend.resize(new_size.into());
+        }
     }
 }
 
