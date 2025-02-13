@@ -1,7 +1,8 @@
-use std::collections::HashMap;
-
 use bytemuck::{Pod, Zeroable};
+use indexmap::IndexMap;
 use wgpu::util::DeviceExt;
+
+use crate::styling::Colour;
 
 pub use self::layer::Layer;
 
@@ -10,7 +11,7 @@ pub mod layer;
 #[derive(Debug)]
 pub struct QRend {
     size: ScreenSize,
-    layers: HashMap<&'static str, Layer>,
+    layers: IndexMap<&'static str, Layer>,
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub surface: wgpu::Surface<'static>,
@@ -22,7 +23,7 @@ pub struct QRend {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Quad {
-    pub colour: [f32; 4],
+    pub colour: Colour,
     pub x: u32,
     pub y: u32,
     pub width: u32,
@@ -32,7 +33,7 @@ pub struct Quad {
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy, Pod, Zeroable)]
 pub struct Vertex {
-    pub color: [f32; 4],
+    pub colour: [f32; 4],
     pub x: u32,
     pub y: u32,
 }
@@ -64,7 +65,7 @@ impl QRend {
         let pipeline = create_pipeline(&device, format, uniform_layout);
         let this = Self {
             size,
-            layers: HashMap::new(),
+            layers: IndexMap::new(),
             queue,
             device,
             surface,
@@ -96,7 +97,7 @@ impl QRend {
         self.queue
             .write_buffer_with(&self.uniform_buffer, 0, UNIFORM_SIZE)
             .expect("invalid quad buffer size")
-            .copy_from_slice(&bytes);
+            .copy_from_slice(bytes);
         self.size = size;
         self.configure_surface();
     }
@@ -196,14 +197,15 @@ impl Vertex {
 
     fn from_quad(
         &Quad {
-            colour: color,
+            colour,
             x,
             y,
             width,
             height,
         }: &Quad,
     ) -> [Self; 6] {
-        let vertex = |x, y| Vertex { color, x, y };
+        let colour = colour.rgba();
+        let vertex = |x, y| Vertex { colour, x, y };
         let bl = vertex(x, y + height);
         let br = vertex(x + width, y + height);
         let tr = vertex(x + width, y);
@@ -211,7 +213,7 @@ impl Vertex {
         [tl, bl, br, tr, tl, br]
     }
 
-    fn from_quads<'a>(quads: &'a [Quad]) -> Vec<Self> {
+    fn from_quads(quads: &[Quad]) -> Vec<Self> {
         let mut vertices = Vec::with_capacity(quads.len() * 6);
         for v in quads.iter().map(Self::from_quad) {
             vertices.extend_from_slice(&v);

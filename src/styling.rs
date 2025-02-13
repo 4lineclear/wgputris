@@ -2,27 +2,29 @@ use crate::game;
 
 #[derive(Debug)]
 pub struct Settings {
-    pub styling: Styling,
+    pub palette: Palette,
     pub sizing: Sizing,
 }
 
 // TODO: move to using textures for blocks
 #[derive(Debug)]
-pub struct Styling {
+pub struct Palette {
     pub fg: Colour,
     pub bg: Colour,
+    pub fg2: Colour,
+    pub bg2: Colour,
     /// empty block
-    e: Colour,
-    i: Colour,
-    t: Colour,
-    o: Colour,
-    l: Colour,
-    j: Colour,
-    s: Colour,
-    z: Colour,
+    pub e: Colour,
+    pub i: Colour,
+    pub t: Colour,
+    pub o: Colour,
+    pub l: Colour,
+    pub j: Colour,
+    pub s: Colour,
+    pub z: Colour,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct Colour {
     pub r: f32,
     pub g: f32,
@@ -39,7 +41,7 @@ impl Colour {
     }
 }
 
-impl Styling {
+impl Palette {
     pub fn colour_block(&self, block: Option<game::Block>) -> Colour {
         match block {
             Some(game::Block::I) => self.i,
@@ -76,24 +78,45 @@ impl Sizing {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            styling: Styling {
-                fg: colours::WHITE,
-                bg: colours::WHITE,
-                e: colours::SILVER,
-                i: colours::WHITE,
-                t: colours::WHITE,
-                o: colours::WHITE,
-                l: colours::WHITE,
-                j: colours::WHITE,
-                s: colours::WHITE,
-                z: colours::WHITE,
-            },
             sizing: Sizing {
                 game_x: 0,
                 game_y: 0,
                 block_size: 30,
                 block_gap: 5,
             },
+            palette: dark_light::detect()
+                .is_ok_and(|m| m == dark_light::Mode::Dark)
+                .then(Palette::dark)
+                .unwrap_or_else(Palette::light),
+        }
+    }
+}
+
+impl Palette {
+    pub fn light() -> Self {
+        Palette {
+            fg: colours::BLACK,
+            bg: colours::WHITE,
+            fg2: colours::OFF_BLACK,
+            bg2: colours::SOFT_WHITE,
+            e: colours::SILVER,
+            i: colours::CYAN,
+            t: colours::PURPLE,
+            o: colours::YELLOW,
+            l: colours::ORANGE,
+            j: colours::BLUE,
+            s: colours::GREEN,
+            z: colours::RED,
+        }
+    }
+    pub fn dark() -> Self {
+        let palette = Palette::light();
+        Palette {
+            fg: palette.bg,
+            bg: palette.fg,
+            fg2: palette.bg2,
+            bg2: palette.fg2,
+            ..palette
         }
     }
 }
@@ -118,9 +141,19 @@ pub mod colours {
     };
 }
     colours!(
-        WHITE(255.0, 255.0, 255.0, 1.0),
-        BLACK(0.0, 255.0, 255.0, 1.0),
-        SILVER(191.0, 191.0, 191.0, 1.0),
+        // Standard colours
+        WHITE(230.0, 230.0, 230.0, 1.0),
+        BLACK(30.0, 30.0, 30.0, 1.0),
+        SOFT_WHITE(200.0, 200.0, 200.0, 1.0),
+        OFF_BLACK(50.0, 50.0, 50.0, 1.0),
+        // block colours
+        SILVER(160.0, 160.0, 160.0, 1.0),
         CYAN(0.0, 255.0, 255.0, 1.0),
+        BLUE(0.0, 0.0, 255.0, 1.0),
+        ORANGE(255.0, 165.0, 0.0, 1.0),
+        YELLOW(255.0, 255.0, 0.0, 1.0),
+        GREEN(0.0, 255.0, 0.0, 1.0),
+        PURPLE(160.0, 32.0, 240.0, 1.0),
+        RED(255.0, 0.0, 0.0, 1.0),
     );
 }

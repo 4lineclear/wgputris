@@ -22,7 +22,7 @@ impl From<(u8, u8)> for Point {
 #[derive(Debug)]
 pub struct Game {
     start: Instant,
-    board: Board,
+    pub board: Board,
 }
 
 impl Game {
@@ -46,7 +46,7 @@ impl Game {
 ///
 /// Higher `y` is lower on the board
 #[derive(Debug, Default, Clone, Copy)]
-pub struct Board([Line; BOARD_HEIGHT as usize]);
+pub struct Board(pub [Line; BOARD_HEIGHT as usize]);
 
 pub const TOTAL_BLOCKS: u8 = BOARD_HEIGHT * BOARD_WIDTH;
 pub const BOARD_HEIGHT: u8 = 24;
@@ -71,7 +71,7 @@ impl Board {
 
 /// A single line
 #[derive(Debug, Default, Clone, Copy)]
-pub struct Line([Option<Block>; BOARD_WIDTH as usize]);
+pub struct Line(pub [Option<Block>; BOARD_WIDTH as usize]);
 
 impl Line {
     pub fn blocks(&self) -> &[Option<Block>] {
