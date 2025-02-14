@@ -53,10 +53,10 @@ impl Layer {
         self.quads[i] = quad;
     }
 
-    pub fn push(&mut self, quad: super::Quad) {
-        self.changed = true;
-        self.quads.push(quad);
-    }
+    // pub fn push(&mut self, quad: super::Quad) {
+    //     self.changed = true;
+    //     self.quads.push(quad);
+    // }
 
     pub fn replace(&mut self, quads: Vec<super::Quad>) {
         self.changed = true;

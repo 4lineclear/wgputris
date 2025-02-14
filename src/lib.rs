@@ -3,7 +3,7 @@ pub mod game;
 pub mod rend;
 pub mod styling;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use winit::{
     application::ApplicationHandler,
@@ -15,7 +15,9 @@ use winit::{
 use crate::game::Game;
 
 pub struct State {
-    game: Game,
+    // TODO: use an overarching 'GameState' struct instead of directly
+    // handling the game struct.
+    game: Mutex<Game>,
     rend: rend::QRend,
     window: Arc<Window>,
     settings: styling::Settings,
@@ -31,6 +33,7 @@ pub struct Rect {
 
 impl State {
     pub async fn new(window: Arc<Window>) -> State {
+        let game = Game::default();
         let size = window.inner_size();
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
@@ -54,16 +57,18 @@ impl State {
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
         let mut rend = rend::QRend::new(size.into(), device, queue, surface_format, surface);
-        let game = Game::new();
         let settings = styling::Settings::default();
 
         let mut base_layer = rend.create_layer();
         let mut game_layer = rend.create_layer();
 
-        draw::base_quads(&settings, &game, &mut base_layer, true);
-        draw::game_quads(&settings, &game, &mut game_layer, true);
+        draw::base_quads(&settings, &game, &mut base_layer);
+        draw::game_quads(&settings, &game, &mut game_layer);
+
         rend.push_layer("base", base_layer);
         rend.push_layer("game", game_layer);
+
+        let game = Mutex::new(game);
         State {
             game,
             rend,
@@ -78,16 +83,22 @@ impl State {
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
-            self.settings
-                .sizing
-                .resize(&self.game, new_size.width, new_size.height);
-            if let Some(layer) = self.rend.get_layer_mut("game") {
-                draw::game_quads(&self.settings, &self.game, layer, false);
-            }
-            if let Some(layer) = self.rend.get_layer_mut("base") {
-                draw::base_quads(&self.settings, &self.game, layer, false);
-            }
+            self.settings.sizing.resize(
+                &self.game.lock().unwrap(),
+                new_size.width,
+                new_size.height,
+            );
+            self.draw();
             self.rend.resize(new_size.into());
+        }
+    }
+
+    fn draw(&mut self) {
+        if let Some(layer) = self.rend.get_layer_mut("game") {
+            draw::game_quads(&self.settings, &self.game.lock().unwrap(), layer);
+        }
+        if let Some(layer) = self.rend.get_layer_mut("base") {
+            draw::base_quads(&self.settings, &self.game.lock().unwrap(), layer);
         }
     }
 
@@ -96,16 +107,34 @@ impl State {
         let winit::keyboard::PhysicalKey::Code(key_code) = event.physical_key else {
             return;
         };
+        if !event.state.is_pressed() {
+            return;
+        }
+        let mut log = true;
+        let mut game = self.game.lock().unwrap();
         match key_code {
-            ArrowLeft => {}
-            ArrowRight => {}
+            Space => {
+                game.place();
+            }
+            ArrowLeft => {
+                game.move_x(-1);
+            }
+            ArrowRight => {
+                game.move_x(1);
+            }
             ArrowUp => {}
-            ArrowDown => {}
-            _ => (),
+            ArrowDown => {
+                game.move_down(1);
+            }
+            _ => log = false,
+        }
+        if log {
+            log::info!("{key_code:?}");
         }
     }
 
     fn render(&mut self) {
+        self.draw();
         self.rend.prepare();
         let output = self.rend.surface.get_current_texture().unwrap();
         let view = output
@@ -142,30 +171,49 @@ impl State {
     }
 }
 
-#[derive(Default)]
 pub struct App {
     pub state: Option<State>,
+}
+
+impl App {
+    pub fn new() -> Self {
+        Self { state: None }
+    }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = Arc::new(
             event_loop
-                .create_window(Window::default_attributes())
+                .create_window(
+                    Window::default_attributes()
+                        .with_visible(false)
+                        .with_maximized(true)
+                        .with_title("wgputris"),
+                )
                 .unwrap(),
         );
-        window.set_maximized(true);
+
         self.state = Some(pollster::block_on(State::new(window.clone())));
+
+        window.set_visible(true);
         window.request_redraw();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let state = self.state.as_mut().expect("state missing");
+        let change = state.game.lock().unwrap().tick();
+        // log::info!("tick!");
+        if change {
+            // log::info!("change!");
+            state.render();
+            state.get_window().request_redraw();
+        }
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
-            WindowEvent::RedrawRequested => {
+            WindowEvent::RedrawRequested if !change => {
                 state.render();
                 state.get_window().request_redraw();
             }

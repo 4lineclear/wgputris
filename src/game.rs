@@ -1,89 +1,67 @@
 use std::time::Instant;
 
-/// A point on the board
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Point {
-    pub(crate) x: u8,
-    pub(crate) y: u8,
-}
+use rand::{seq::SliceRandom, RngCore, SeedableRng};
+use rand_xoshiro::Xoshiro256Plus;
 
-impl Point {
-    pub fn new(x: u8, y: u8) -> Self {
-        Self { x, y }
-    }
-}
+pub mod point;
 
-impl From<(u8, u8)> for Point {
-    fn from((x, y): (u8, u8)) -> Self {
-        Self::new(x, y)
-    }
-}
+pub use point::IPoint;
+pub use point::Point;
+
+// TODO: move mutex to be around game.
 
 #[derive(Debug)]
 pub struct Game {
+    seed: u64,
+    rng: Xoshiro256Plus,
+    bag: MinoBag,
+    mino: Mino,
+    time: GameTime,
+    board: Board,
+}
+
+#[derive(Debug)]
+enum Action {
+    MinoAction(MinoAction),
+    Idle,
+}
+
+#[derive(Debug)]
+enum MinoAction {
+    Horizontal(i8),
+    Vertical(i8),
+}
+
+#[derive(Debug, Clone)]
+struct GameTime {
     start: Instant,
-    pub board: Board,
+    now: Instant,
 }
 
-impl Game {
-    pub fn new() -> Self {
-        Self {
-            start: Instant::now(),
-            board: Board::default(),
-        }
-    }
-
-    pub fn start(&mut self) {
-        self.start = Instant::now()
-    }
-
-    pub fn board(&self) -> Board {
-        self.board
-    }
+#[derive(Debug)]
+struct MinoBag {
+    held: Option<Block>,
+    minos: Vec<Block>,
 }
 
-/// The main board
-///
-/// Higher `y` is lower on the board
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Board(pub [Line; BOARD_HEIGHT as usize]);
-
-pub const TOTAL_BLOCKS: u8 = BOARD_HEIGHT * BOARD_WIDTH;
-pub const BOARD_HEIGHT: u8 = 24;
-pub const BOARD_WIDTH: u8 = 10;
-
-impl Board {
-    /// Returns the visible lines
-    pub fn visible(&self) -> &[Line] {
-        &self.0[4..]
-    }
-    pub fn origin(&self) -> Point {
-        Point::new(0, 23)
-    }
-    pub fn line(&self, y: usize) -> Line {
-        self.0[y]
-    }
-    pub fn block(&self, point: impl Into<Point>) -> Option<Block> {
-        let Point { x, y } = point.into();
-        self.line(y as usize).block(x)
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mino {
+    pub pos: Point,
+    pub block: Block,
+    pub points: [IPoint; 4],
 }
 
-/// A single line
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Line(pub [Option<Block>; BOARD_WIDTH as usize]);
-
-impl Line {
-    pub fn blocks(&self) -> &[Option<Block>] {
-        &self.0
-    }
-    pub fn block(&self, x: impl Into<usize>) -> Option<Block> {
-        self.0[x.into()]
-    }
+#[derive(Debug, Clone)]
+pub struct BlockIter<'a> {
+    mino_points: [Point; 4],
+    mino_block: Block,
+    block: &'a [Option<Block>],
+    index: u8,
+    y: u8,
 }
 
 /// A single block
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Block {
     /// cyan
     I,
@@ -99,4 +77,262 @@ pub enum Block {
     S,
     /// red
     Z,
+}
+
+impl Game {
+    pub fn new(seed: Option<u64>) -> Self {
+        let seed = seed.unwrap_or_else(|| rand::rng().next_u64());
+        let mut rng = Xoshiro256Plus::seed_from_u64(seed);
+        let mut bag = MinoBag::new(&mut rng);
+
+        let mino = bag.gen_mino(&mut rng);
+        let now = Instant::now();
+        Self {
+            seed,
+            rng,
+            bag,
+            mino,
+            time: GameTime { start: now, now },
+            board: Board::default(),
+        }
+    }
+
+    fn apply_action(&mut self, action: Action) -> bool {
+        use Action::*;
+        match action {
+            MinoAction(ma) => self.move_mino(ma),
+            Idle => false,
+        }
+    }
+
+    fn move_mino(&mut self, ma: MinoAction) -> bool {
+        use MinoAction::*;
+
+        let prev = self.mino;
+
+        let mut try_move = |dx, dy| {
+            let mapp = |point: Point| {
+                Point::new(
+                    point.x.saturating_add_signed(dx),
+                    point.y.saturating_add_signed(dy),
+                )
+            };
+            if self
+                .mino
+                .real_points()
+                .iter()
+                .all(|&p| (|orig| self.board().check_block(mapp(orig)))(p))
+            {
+                self.mino.pos = mapp(self.mino.pos);
+            }
+        };
+
+        match ma {
+            Horizontal(x) => try_move(x, 0),
+            Vertical(y) => try_move(0, y),
+        }
+
+        prev != self.mino
+    }
+
+    pub fn place(&mut self) {
+        let old = self.mino;
+        self.mino = self.bag.gen_mino(&mut self.rng);
+
+        old.real_points().into_iter().for_each(|point| {
+            *self.board.block_mut(point) = Some(old.block);
+        });
+    }
+
+    pub fn move_x(&mut self, amount: i8) {
+        self.move_mino(MinoAction::Horizontal(amount));
+    }
+
+    pub fn move_down(&mut self, amount: i8) {
+        self.move_mino(MinoAction::Vertical(amount));
+    }
+
+    pub fn tick(&mut self) -> bool {
+        let action = self.time.tick();
+        self.apply_action(action)
+    }
+
+    pub fn start(&mut self) {
+        self.rng = Xoshiro256Plus::seed_from_u64(self.seed);
+        self.time.start = Instant::now();
+    }
+
+    pub fn mino(&self) -> Mino {
+        self.mino
+    }
+
+    pub fn board(&self) -> Board {
+        self.board
+    }
+
+    pub fn block_iter<'a>(&'a self, y: u8) -> BlockIter<'a> {
+        BlockIter::new(y, &self.board.0[y as usize].0, self.mino)
+    }
+}
+
+impl Default for Game {
+    fn default() -> Self {
+        Self::new(None)
+    }
+}
+
+/// The main board
+///
+/// Higher `y` is lower on the board
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Board([Line; BOARD_HEIGHT as usize]);
+
+pub const TOTAL_BLOCKS: u8 = BOARD_HEIGHT * BOARD_WIDTH;
+pub const VISIBLE_START: u8 = 4;
+pub const BOARD_HEIGHT: u8 = 24;
+pub const BOARD_WIDTH: u8 = 10;
+
+impl Board {
+    pub fn lines(&self) -> &[Line] {
+        &self.0
+    }
+    /// Returns the visible lines
+    pub fn visible(&self) -> &[Line] {
+        &self.0[4..]
+    }
+    pub fn origin(&self) -> Point {
+        Point::new(0, 23)
+    }
+    pub fn line(&self, y: usize) -> Line {
+        self.0[y]
+    }
+    pub fn block(&self, point: impl Into<Point>) -> Option<Block> {
+        let Point { x, y } = point.into();
+        self.line(y as usize).block(x)
+    }
+    fn block_mut(&mut self, point: impl Into<Point>) -> &mut Option<Block> {
+        let Point { x, y } = point.into();
+        self.0[y as usize].block_mut(x)
+    }
+    pub fn check_block(&self, p: Point) -> bool {
+        return self.0.len() > p.y as usize
+            && self.line(0).0.len() > p.x as usize
+            && self.block(p).is_none();
+    }
+}
+
+/// A single line
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Line([Option<Block>; BOARD_WIDTH as usize]);
+
+impl Line {
+    pub fn blocks(&self) -> &[Option<Block>] {
+        &self.0
+    }
+    pub fn block(&self, x: impl Into<usize>) -> Option<Block> {
+        self.0[x.into()]
+    }
+    fn block_mut(&mut self, x: impl Into<usize>) -> &mut Option<Block> {
+        &mut self.0[x.into()]
+    }
+}
+
+impl MinoBag {
+    fn new(rng: &mut Xoshiro256Plus) -> Self {
+        let minos = [random_minos(rng), random_minos(rng)].concat();
+        Self { held: None, minos }
+    }
+
+    fn gen_mino(&mut self, rng: &mut Xoshiro256Plus) -> Mino {
+        let block = self.next_mino(rng);
+        Mino {
+            block,
+            pos: (4, 0).into(),
+            points: block.initial_shape(),
+        }
+    }
+
+    fn next_mino(&mut self, rng: &mut Xoshiro256Plus) -> Block {
+        let block = self.minos.remove(0);
+        if self.minos.len() <= 7 {
+            self.minos.extend(random_minos(rng));
+        }
+        block
+    }
+}
+
+fn random_minos(rng: &mut Xoshiro256Plus) -> [Block; 7] {
+    use Block::*;
+    let mut minos = [I, T, O, L, J, S, Z];
+    minos.shuffle(rng);
+    minos
+}
+
+impl GameTime {
+    pub fn tick(&mut self) -> Action {
+        let now = Instant::now();
+        let _diff = now - self.now;
+        self.now = now;
+        Action::MinoAction(MinoAction::Vertical(1))
+    }
+}
+
+impl Block {
+    fn initial_shape(self) -> [IPoint; 4] {
+        use Block::*;
+
+        fn points(p: [(i8, i8); 4]) -> [IPoint; 4] {
+            p.map(IPoint::from)
+        }
+
+        points(match self {
+            I => [(-2, 0), (-1, 0), (1, 0), (2, 0)],
+            T => [(0, 0), (0, 0), (0, 0), (0, 0)],
+            O => [(0, 0), (0, 0), (0, 0), (0, 0)],
+            L => [(0, 0), (0, 0), (0, 0), (0, 0)],
+            J => [(0, 0), (0, 0), (0, 0), (0, 0)],
+            S => [(0, 0), (0, 0), (0, 0), (0, 0)],
+            Z => [(0, 0), (0, 0), (0, 0), (0, 0)],
+        })
+    }
+}
+
+impl Mino {
+    fn real_points(self) -> [Point; 4] {
+        self.points.map(|mut p| {
+            p.x += (p.x < 0) as i8;
+            self.pos + p
+        })
+    }
+}
+
+impl<'a> BlockIter<'a> {
+    fn new(y: u8, block: &'a [Option<Block>], mino: Mino) -> Self {
+        Self {
+            mino_points: mino.real_points(),
+            mino_block: mino.block,
+            block,
+            index: 0,
+            y,
+        }
+    }
+    fn block_or_mino(&self) -> Option<Block> {
+        if self.mino_points.contains(&(self.index, self.y).into()) {
+            return Some(self.mino_block);
+        }
+        self.block[self.index as usize]
+    }
+}
+
+impl<'a> Iterator for BlockIter<'a> {
+    type Item = Option<Block>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index as usize >= self.block.len() {
+            return None;
+        }
+        let n = self.block_or_mino();
+        self.index += 1;
+        Some(n)
+    }
 }

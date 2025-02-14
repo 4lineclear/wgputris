@@ -53,6 +53,7 @@ impl From<winit::dpi::PhysicalSize<u32>> for ScreenSize {
 
 const UNIFORM_SIZE: std::num::NonZero<u64> =
     wgpu::BufferSize::new(std::mem::size_of::<ScreenSize>() as u64).unwrap();
+
 impl QRend {
     pub fn new(
         size: ScreenSize,
@@ -124,16 +125,6 @@ impl QRend {
 
     pub fn get_layer_mut(&mut self, label: &'static str) -> Option<&mut Layer> {
         self.layers.get_mut(label)
-    }
-
-    pub fn push(&mut self, label: &'static str, quad: Quad) {
-        if let Some(layer) = self.layers.get_mut(label) {
-            layer.push(quad);
-        } else {
-            let mut layer = Layer::new("wgputris.rend.layer", &self.device, 0);
-            layer.push(quad);
-            self.push_layer(label, layer);
-        }
     }
 
     pub fn prepare(&mut self) {
