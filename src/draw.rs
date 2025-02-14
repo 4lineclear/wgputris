@@ -31,7 +31,7 @@ pub fn base_quads(
         (block_size + block_gap) * game.board().line(0).blocks().len() as u32 + *block_gap,
         (block_size + block_gap) * game.board().visible().len() as u32 + block_gap,
     );
-    base_layer.replace(vec![quad]);
+    base_layer.set_quads(vec![quad]);
 }
 
 pub fn game_quads(
@@ -72,5 +72,5 @@ pub fn game_quads(
         cx = *game_x;
     }
 
-    game_layer.replace(quads);
+    game_layer.set_quads(quads);
 }

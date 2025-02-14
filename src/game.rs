@@ -1,3 +1,4 @@
+use std::time::Duration;
 use std::time::Instant;
 
 use rand::{seq::SliceRandom, RngCore, SeedableRng};
@@ -7,8 +8,6 @@ pub mod point;
 
 pub use point::IPoint;
 pub use point::Point;
-
-// TODO: move mutex to be around game.
 
 #[derive(Debug)]
 pub struct Game {
@@ -36,6 +35,7 @@ enum MinoAction {
 struct GameTime {
     start: Instant,
     now: Instant,
+    drop: Duration,
 }
 
 #[derive(Debug)]
@@ -46,9 +46,19 @@ struct MinoBag {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mino {
+    pub ori: Ori,
     pub pos: Point,
     pub block: Block,
-    pub points: [IPoint; 4],
+    pub points: [Point; 4],
+}
+
+#[derive(Debug, Clone, Default, Copy, PartialEq, Eq)]
+pub enum Ori {
+    #[default]
+    Up,
+    Left,
+    Down,
+    Right,
 }
 
 #[derive(Debug, Clone)]
@@ -92,7 +102,7 @@ impl Game {
             rng,
             bag,
             mino,
-            time: GameTime { start: now, now },
+            time: GameTime::new(now),
             board: Board::default(),
         }
     }
@@ -246,9 +256,10 @@ impl MinoBag {
     fn gen_mino(&mut self, rng: &mut Xoshiro256Plus) -> Mino {
         let block = self.next_mino(rng);
         Mino {
+            ori: Ori::Up,
             block,
             pos: (4, 0).into(),
-            points: block.initial_shape(),
+            points: block.points(Ori::Up),
         }
     }
 
@@ -269,40 +280,89 @@ fn random_minos(rng: &mut Xoshiro256Plus) -> [Block; 7] {
 }
 
 impl GameTime {
+    fn new(now: Instant) -> Self {
+        Self {
+            start: now,
+            now,
+            drop: Duration::new(0, 0),
+        }
+    }
+
     pub fn tick(&mut self) -> Action {
         let now = Instant::now();
-        let _diff = now - self.now;
+        let diff = now - self.now;
         self.now = now;
-        Action::MinoAction(MinoAction::Vertical(1))
+        self.drop += diff;
+
+        if self.drop.as_millis() > 1_600 {
+            let mut drop = 0;
+            while self.drop.as_millis() > 1_600 {
+                self.drop -= Duration::from_millis(1_600);
+                drop += 1;
+            }
+            Action::MinoAction(MinoAction::Vertical(drop))
+        } else {
+            Action::Idle
+        }
     }
 }
 
 impl Block {
-    fn initial_shape(self) -> [IPoint; 4] {
+    fn points(self, ori: Ori) -> [Point; 4] {
         use Block::*;
+        use Ori::*;
 
-        fn points(p: [(i8, i8); 4]) -> [IPoint; 4] {
-            p.map(IPoint::from)
+        match self {
+            I => match ori {
+                Up => [(0, 1), (1, 1), (2, 1), (3, 1)],
+                Left => [(1, 0), (1, 1), (1, 2), (1, 3)],
+                Down => [(0, 2), (1, 2), (2, 2), (3, 2)],
+                Right => [(2, 0), (2, 1), (2, 2), (2, 3)],
+            },
+            J => match ori {
+                Up => [(0, 1), (1, 1), (2, 1), (0, 0)],
+                Left => [(1, 0), (1, 1), (1, 2), (0, 2)],
+                Down => [(0, 1), (1, 1), (2, 1), (2, 2)],
+                Right => [(1, 0), (1, 1), (1, 2), (2, 0)],
+            },
+            L => match ori {
+                Up => [(0, 1), (1, 1), (2, 1), (2, 0)],
+                Left => [(1, 0), (1, 1), (1, 2), (0, 0)],
+                Down => [(0, 1), (1, 1), (2, 1), (0, 2)],
+                Right => [(1, 0), (1, 1), (1, 2), (2, 2)],
+            },
+            O => match ori {
+                Up => [(1, 0), (1, 1), (2, 0), (2, 1)],
+                Left => [(1, 0), (1, 1), (2, 0), (2, 1)],
+                Down => [(1, 0), (1, 1), (2, 0), (2, 1)],
+                Right => [(1, 0), (1, 1), (2, 0), (2, 1)],
+            },
+            S => match ori {
+                Up => [(1, 0), (2, 0), (0, 1), (1, 1)],
+                Left => [(0, 0), (0, 1), (1, 1), (1, 2)],
+                Down => [(1, 1), (2, 1), (0, 2), (1, 2)],
+                Right => [(1, 0), (1, 1), (2, 1), (2, 2)],
+            },
+            T => match ori {
+                Up => [(1, 0), (0, 1), (1, 1), (2, 1)],
+                Left => [(1, 0), (0, 1), (1, 1), (1, 2)],
+                Down => [(0, 1), (1, 1), (2, 1), (1, 2)],
+                Right => [(1, 0), (1, 1), (2, 1), (1, 2)],
+            },
+            Z => match ori {
+                Up => [(0, 0), (1, 0), (1, 1), (2, 1)],
+                Left => [(1, 0), (0, 1), (1, 1), (0, 2)],
+                Down => [(0, 1), (1, 1), (1, 2), (2, 2)],
+                Right => [(2, 0), (1, 1), (2, 1), (1, 2)],
+            },
         }
-
-        points(match self {
-            I => [(-2, 0), (-1, 0), (1, 0), (2, 0)],
-            T => [(0, 0), (0, 0), (0, 0), (0, 0)],
-            O => [(0, 0), (0, 0), (0, 0), (0, 0)],
-            L => [(0, 0), (0, 0), (0, 0), (0, 0)],
-            J => [(0, 0), (0, 0), (0, 0), (0, 0)],
-            S => [(0, 0), (0, 0), (0, 0), (0, 0)],
-            Z => [(0, 0), (0, 0), (0, 0), (0, 0)],
-        })
+        .map(Point::from)
     }
 }
 
 impl Mino {
     fn real_points(self) -> [Point; 4] {
-        self.points.map(|mut p| {
-            p.x += (p.x < 0) as i8;
-            self.pos + p
-        })
+        self.points.map(|p| self.pos + p)
     }
 }
 

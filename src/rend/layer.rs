@@ -48,17 +48,7 @@ impl Layer {
         self.quads.is_empty()
     }
 
-    pub fn set(&mut self, i: usize, quad: super::Quad) {
-        self.changed = true;
-        self.quads[i] = quad;
-    }
-
-    // pub fn push(&mut self, quad: super::Quad) {
-    //     self.changed = true;
-    //     self.quads.push(quad);
-    // }
-
-    pub fn replace(&mut self, quads: Vec<super::Quad>) {
+    pub fn set_quads(&mut self, quads: Vec<super::Quad>) {
         self.changed = true;
         self.quads = quads;
     }
