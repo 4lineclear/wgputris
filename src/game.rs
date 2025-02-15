@@ -15,6 +15,7 @@ pub struct Game {
     rng: Xoshiro256Plus,
     bag: MinoBag,
     mino: Mino,
+    ghost: Mino,
     time: GameTime,
     board: Board,
 }
@@ -40,6 +41,7 @@ struct GameTime {
 
 #[derive(Debug)]
 struct MinoBag {
+    is_held: bool,
     held: Option<Block>,
     minos: Vec<Block>,
 }
@@ -47,7 +49,7 @@ struct MinoBag {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mino {
     pub ori: Ori,
-    pub pos: Point,
+    pub pos: IPoint,
     pub block: Block,
     pub points: [Point; 4],
 }
@@ -63,6 +65,7 @@ pub enum Ori {
 
 #[derive(Debug, Clone)]
 pub struct BlockIter<'a> {
+    ghost_points: [Point; 4],
     mino_points: [Point; 4],
     mino_block: Block,
     block: &'a [Option<Block>],
@@ -75,16 +78,16 @@ pub struct BlockIter<'a> {
 pub enum Block {
     /// cyan
     I,
-    /// magenta
-    T,
-    /// yellow
-    O,
-    /// orange
-    L,
     /// blue
     J,
+    /// orange
+    L,
+    /// yellow
+    O,
     /// green
     S,
+    /// magenta
+    T,
     /// red
     Z,
 }
@@ -102,6 +105,7 @@ impl Game {
             rng,
             bag,
             mino,
+            ghost: mino,
             time: GameTime::new(now),
             board: Board::default(),
         }
@@ -115,43 +119,123 @@ impl Game {
         }
     }
 
-    fn move_mino(&mut self, ma: MinoAction) -> bool {
-        use MinoAction::*;
-
-        let prev = self.mino;
-
-        let mut try_move = |dx, dy| {
-            let mapp = |point: Point| {
-                Point::new(
-                    point.x.saturating_add_signed(dx),
-                    point.y.saturating_add_signed(dy),
-                )
-            };
-            if self
-                .mino
-                .real_points()
-                .iter()
-                .all(|&p| (|orig| self.board().check_block(mapp(orig)))(p))
-            {
-                self.mino.pos = mapp(self.mino.pos);
-            }
-        };
-
-        match ma {
-            Horizontal(x) => try_move(x, 0),
-            Vertical(y) => try_move(0, y),
+    pub fn hold(&mut self) {
+        if self.bag.is_held {
+            return;
         }
-
-        prev != self.mino
+        self.bag.is_held = true;
+        let old = self.bag.held.replace(self.mino.block);
+        self.mino = old
+            .map(Mino::new)
+            .unwrap_or_else(|| self.bag.gen_mino(&mut self.rng));
     }
 
     pub fn place(&mut self) {
+        self.bag.is_held = false;
+        while self.move_mino(MinoAction::Vertical(1)) {}
         let old = self.mino;
         self.mino = self.bag.gen_mino(&mut self.rng);
 
         old.real_points().into_iter().for_each(|point| {
             *self.board.block_mut(point) = Some(old.block);
         });
+
+        let mut line = self.board.lines().len();
+        while line > 0 {
+            let end = line;
+            line -= 1;
+            while self.board.line(line).blocks().iter().all(Option::is_some) {
+                line -= 1;
+            }
+            let diff = end - line - 1;
+            if diff != 0 {
+                self.board.0[..end].rotate_right(diff);
+                self.board.0[..diff]
+                    .iter_mut()
+                    .for_each(|l| *l = Line::default());
+            }
+        }
+    }
+
+    pub fn rotate(&mut self, left: Option<bool>) {
+        use Ori::*;
+        let old = self.mino.points;
+        let ori = match left {
+            Some(false) => match self.mino.ori {
+                Up => Right,
+                Left => Up,
+                Down => Left,
+                Right => Down,
+            },
+            Some(true) => match self.mino.ori {
+                Up => Left,
+                Left => Down,
+                Down => Right,
+                Right => Up,
+            },
+            None => match self.mino.ori {
+                Up => Down,
+                Left => Right,
+                Down => Up,
+                Right => Left,
+            },
+        };
+        self.mino.points = self.mino.block.points(ori);
+
+        if self
+            .mino
+            .real_points()
+            .iter()
+            .all(|&p| self.board().check_block(p))
+        {
+            self.mino.ori = ori;
+        } else {
+            self.mino.points = old;
+        }
+    }
+
+    fn try_move_mino(&mut self, mino: Mino, dx: i8, dy: i8) -> IPoint {
+        let mapp =
+            |point: IPoint| IPoint::new(point.x.saturating_add(dx), point.y.saturating_add(dy));
+        if mino
+            .real_points()
+            .iter()
+            .all(|&p| self.board.icheck_block(mapp(p.into())))
+        {
+            mapp(mino.pos)
+        } else {
+            mino.pos
+        }
+    }
+
+    fn move_mino(&mut self, ma: MinoAction) -> bool {
+        use MinoAction::*;
+
+        let prev = self.mino;
+
+        self.mino.pos = match ma {
+            Horizontal(x) => self.try_move_mino(self.mino, x, 0),
+            Vertical(y) => self.try_move_mino(self.mino, 0, y),
+        };
+
+        prev.pos != self.mino.pos || self.calc_ghost()
+    }
+
+    pub fn calc_ghost(&mut self) -> bool {
+        let mut new = self.mino;
+        loop {
+            let ngpos = self.try_move_mino(new, 0, 1);
+            if ngpos == new.pos {
+                break;
+            }
+            new.pos = ngpos;
+        }
+        if self.ghost == new {
+            false
+        } else {
+            self.ghost = new;
+            true
+        }
     }
 
     pub fn move_x(&mut self, amount: i8) {
@@ -164,7 +248,7 @@ impl Game {
 
     pub fn tick(&mut self) -> bool {
         let action = self.time.tick();
-        self.apply_action(action)
+        self.apply_action(action) || self.calc_ghost()
     }
 
     pub fn start(&mut self) {
@@ -181,7 +265,7 @@ impl Game {
     }
 
     pub fn block_iter<'a>(&'a self, y: u8) -> BlockIter<'a> {
-        BlockIter::new(y, &self.board.0[y as usize].0, self.mino)
+        BlockIter::new(y, &self.board.0[y as usize].0, self.mino, self.ghost)
     }
 }
 
@@ -229,6 +313,13 @@ impl Board {
             && self.line(0).0.len() > p.x as usize
             && self.block(p).is_none();
     }
+    pub fn icheck_block(&self, p: IPoint) -> bool {
+        return p.x >= 0
+            && p.y >= 0
+            && self.0.len() > p.y as usize
+            && self.line(0).0.len() > p.x as usize
+            && self.block(p).is_none();
+    }
 }
 
 /// A single line
@@ -249,18 +340,15 @@ impl Line {
 
 impl MinoBag {
     fn new(rng: &mut Xoshiro256Plus) -> Self {
-        let minos = [random_minos(rng), random_minos(rng)].concat();
-        Self { held: None, minos }
+        Self {
+            is_held: false,
+            held: None,
+            minos: [random_minos(rng), random_minos(rng)].concat(),
+        }
     }
 
     fn gen_mino(&mut self, rng: &mut Xoshiro256Plus) -> Mino {
-        let block = self.next_mino(rng);
-        Mino {
-            ori: Ori::Up,
-            block,
-            pos: (4, 0).into(),
-            points: block.points(Ori::Up),
-        }
+        Mino::new(self.next_mino(rng))
     }
 
     fn next_mino(&mut self, rng: &mut Xoshiro256Plus) -> Block {
@@ -309,66 +397,28 @@ impl GameTime {
 
 impl Block {
     fn points(self, ori: Ori) -> [Point; 4] {
-        use Block::*;
-        use Ori::*;
-
-        match self {
-            I => match ori {
-                Up => [(0, 1), (1, 1), (2, 1), (3, 1)],
-                Left => [(1, 0), (1, 1), (1, 2), (1, 3)],
-                Down => [(0, 2), (1, 2), (2, 2), (3, 2)],
-                Right => [(2, 0), (2, 1), (2, 2), (2, 3)],
-            },
-            J => match ori {
-                Up => [(0, 1), (1, 1), (2, 1), (0, 0)],
-                Left => [(1, 0), (1, 1), (1, 2), (0, 2)],
-                Down => [(0, 1), (1, 1), (2, 1), (2, 2)],
-                Right => [(1, 0), (1, 1), (1, 2), (2, 0)],
-            },
-            L => match ori {
-                Up => [(0, 1), (1, 1), (2, 1), (2, 0)],
-                Left => [(1, 0), (1, 1), (1, 2), (0, 0)],
-                Down => [(0, 1), (1, 1), (2, 1), (0, 2)],
-                Right => [(1, 0), (1, 1), (1, 2), (2, 2)],
-            },
-            O => match ori {
-                Up => [(1, 0), (1, 1), (2, 0), (2, 1)],
-                Left => [(1, 0), (1, 1), (2, 0), (2, 1)],
-                Down => [(1, 0), (1, 1), (2, 0), (2, 1)],
-                Right => [(1, 0), (1, 1), (2, 0), (2, 1)],
-            },
-            S => match ori {
-                Up => [(1, 0), (2, 0), (0, 1), (1, 1)],
-                Left => [(0, 0), (0, 1), (1, 1), (1, 2)],
-                Down => [(1, 1), (2, 1), (0, 2), (1, 2)],
-                Right => [(1, 0), (1, 1), (2, 1), (2, 2)],
-            },
-            T => match ori {
-                Up => [(1, 0), (0, 1), (1, 1), (2, 1)],
-                Left => [(1, 0), (0, 1), (1, 1), (1, 2)],
-                Down => [(0, 1), (1, 1), (2, 1), (1, 2)],
-                Right => [(1, 0), (1, 1), (2, 1), (1, 2)],
-            },
-            Z => match ori {
-                Up => [(0, 0), (1, 0), (1, 1), (2, 1)],
-                Left => [(1, 0), (0, 1), (1, 1), (0, 2)],
-                Down => [(0, 1), (1, 1), (1, 2), (2, 2)],
-                Right => [(2, 0), (1, 1), (2, 1), (1, 2)],
-            },
-        }
-        .map(Point::from)
+        MINO_POINTS[self as usize][ori as usize]
     }
 }
 
 impl Mino {
+    fn new(block: Block) -> Self {
+        Mino {
+            ori: Ori::Up,
+            block,
+            pos: (3, 3).into(),
+            points: block.points(Ori::Up),
+        }
+    }
     fn real_points(self) -> [Point; 4] {
-        self.points.map(|p| self.pos + p)
+        self.points.map(|p| p + self.pos)
     }
 }
 
 impl<'a> BlockIter<'a> {
-    fn new(y: u8, block: &'a [Option<Block>], mino: Mino) -> Self {
+    fn new(y: u8, block: &'a [Option<Block>], mino: Mino, ghost: Mino) -> Self {
         Self {
+            ghost_points: ghost.real_points(),
             mino_points: mino.real_points(),
             mino_block: mino.block,
             block,
@@ -376,16 +426,19 @@ impl<'a> BlockIter<'a> {
             y,
         }
     }
-    fn block_or_mino(&self) -> Option<Block> {
+    fn block_or_mino(&self) -> Option<(Block, bool)> {
         if self.mino_points.contains(&(self.index, self.y).into()) {
-            return Some(self.mino_block);
+            return Some((self.mino_block, false));
         }
-        self.block[self.index as usize]
+        if self.ghost_points.contains(&(self.index, self.y).into()) {
+            return Some((self.mino_block, true));
+        }
+        self.block[self.index as usize].zip(Some(false))
     }
 }
 
 impl<'a> Iterator for BlockIter<'a> {
-    type Item = Option<Block>;
+    type Item = Option<(Block, bool)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.index as usize >= self.block.len() {
@@ -396,3 +449,108 @@ impl<'a> Iterator for BlockIter<'a> {
         Some(n)
     }
 }
+
+macro_rules! points {
+    ($point:expr,
+      $([
+        $(($x:expr, $y:expr)),*
+      ]),* $(,)?
+    ) => {
+        [$(
+            [$(
+                $point($x, $y),
+            )*],
+        )*]
+    };
+    ($point:expr,$([
+      $([
+        $(($x:expr, $y:expr)),*
+      ]),* $(,)?
+    ]),* $(,)? ) => {
+        [$(
+            [$(
+                [$(
+                    $point($x, $y),
+                )*],
+            )*],
+        )*]
+    };
+}
+
+const MINO_POINTS: [[[Point; 4]; 4]; 7] = points![
+    Point::new,
+    [
+        [(0, 1), (1, 1), (2, 1), (3, 1)],
+        [(1, 0), (1, 1), (1, 2), (1, 3)],
+        [(0, 2), (1, 2), (2, 2), (3, 2)],
+        [(2, 0), (2, 1), (2, 2), (2, 3)],
+    ], // I
+    [
+        [(0, 1), (1, 1), (2, 1), (0, 0)],
+        [(1, 0), (1, 1), (1, 2), (0, 2)],
+        [(0, 1), (1, 1), (2, 1), (2, 2)],
+        [(1, 0), (1, 1), (1, 2), (2, 0)],
+    ], // J
+    [
+        [(0, 1), (1, 1), (2, 1), (2, 0)],
+        [(1, 0), (1, 1), (1, 2), (0, 0)],
+        [(0, 1), (1, 1), (2, 1), (0, 2)],
+        [(1, 0), (1, 1), (1, 2), (2, 2)],
+    ], // L
+    [
+        [(1, 0), (1, 1), (2, 0), (2, 1)],
+        [(1, 0), (1, 1), (2, 0), (2, 1)],
+        [(1, 0), (1, 1), (2, 0), (2, 1)],
+        [(1, 0), (1, 1), (2, 0), (2, 1)],
+    ], // O
+    [
+        [(1, 0), (2, 0), (0, 1), (1, 1)],
+        [(0, 0), (0, 1), (1, 1), (1, 2)],
+        [(1, 1), (2, 1), (0, 2), (1, 2)],
+        [(1, 0), (1, 1), (2, 1), (2, 2)],
+    ], // S
+    [
+        [(1, 0), (0, 1), (1, 1), (2, 1)],
+        [(1, 0), (0, 1), (1, 1), (1, 2)],
+        [(0, 1), (1, 1), (2, 1), (1, 2)],
+        [(1, 0), (1, 1), (2, 1), (1, 2)],
+    ], // T
+    [
+        [(0, 0), (1, 0), (1, 1), (2, 1)],
+        [(1, 0), (0, 1), (1, 1), (0, 2)],
+        [(0, 1), (1, 1), (1, 2), (2, 2)],
+        [(2, 0), (1, 1), (2, 1), (1, 2)],
+    ], // Z
+];
+
+pub const WALLKICKS: [[IPoint; 5]; 8] = points![
+    IPoint::new,
+    [(0, 0), (1, 0), (1, -1), (0, 2), (1, 2)],
+    [(0, 0), (-1, 0), (-1, 1), (0, -2), (-1, -2)],
+    [(0, 0), (-1, 0), (-1, 1), (0, -2), (-1, -2)],
+    [(0, 0), (1, 0), (1, -1), (0, 2), (1, 2)],
+    [(0, 0), (-1, 0), (-1, -1), (0, 2), (-1, 2)],
+    [(0, 0), (1, 0), (1, 1), (0, -2), (1, -2)],
+    [(0, 0), (1, 0), (1, 1), (0, -2), (1, -2)],
+    [(0, 0), (-1, 0), (-1, -1), (0, 2), (-1, 2)],
+];
+
+pub const I_WALLKICKS: [[IPoint; 5]; 8] = points![
+    IPoint::new,
+    [(0, 0), (2, 0), (-1, 0), (2, -1), (-1, 2)],
+    [(0, 0), (-2, 0), (1, 0), (-2, 1), (1, -2)],
+    [(0, 0), (1, 0), (-2, 0), (1, 2), (-2, -1)],
+    [(0, 0), (-1, 0), (2, 0), (-1, -2), (2, 1)],
+    [(0, 0), (-2, 0), (1, 0), (-2, 1), (1, -2)],
+    [(0, 0), (2, 0), (-1, 0), (2, -1), (-1, 2)],
+    [(0, 0), (-1, 0), (2, 0), (-1, -2), (2, 1)],
+    [(0, 0), (1, 0), (-2, 0), (1, 2), (-2, -1)],
+];
+
+pub const WALLKICKS_180: [[IPoint; 6]; 4] = points![
+    IPoint::new,
+    [(0, 0), (0, -1), (-1, -1), (1, -1), (-1, 0), (1, 0)],
+    [(0, 0), (0, 1), (1, 1), (-1, 1), (1, 0), (-1, 0)],
+    [(0, 0), (-1, 0), (-1, -2), (-1, -1), (0, -2), (0, -1)],
+    [(0, 0), (1, 0), (1, -2), (1, -1), (0, -2), (0, -1)],
+];

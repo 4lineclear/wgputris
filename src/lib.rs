@@ -122,14 +122,25 @@ impl State {
             ArrowRight => {
                 game.move_x(1);
             }
-            ArrowUp => {}
+            KeyZ => {
+                game.rotate(Some(true));
+            }
+            KeyX => {
+                game.rotate(Some(false));
+            }
+            KeyC => {
+                game.hold();
+            }
+            ArrowUp => {
+                game.rotate(None);
+            }
             ArrowDown => {
                 game.move_down(1);
             }
             _ => log = false,
         }
         if log {
-            log::info!("{key_code:?}");
+            // log::info!("{key_code:?}");
         }
     }
 
@@ -202,8 +213,8 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let state = self.state.as_mut().expect("state missing");
+
         let change = state.game.lock().unwrap().tick();
-        // log::info!("tick!");
         if change {
             // log::info!("change!");
             state.render();

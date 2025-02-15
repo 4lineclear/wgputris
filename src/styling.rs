@@ -16,11 +16,11 @@ pub struct Palette {
     /// empty block
     pub e: Colour,
     pub i: Colour,
-    pub t: Colour,
-    pub o: Colour,
-    pub l: Colour,
     pub j: Colour,
+    pub l: Colour,
+    pub o: Colour,
     pub s: Colour,
+    pub t: Colour,
     pub z: Colour,
 }
 
@@ -45,11 +45,11 @@ impl Palette {
     pub fn colour_block(&self, block: Option<game::Block>) -> Colour {
         match block {
             Some(game::Block::I) => self.i,
-            Some(game::Block::T) => self.t,
-            Some(game::Block::O) => self.o,
             Some(game::Block::L) => self.l,
             Some(game::Block::J) => self.j,
+            Some(game::Block::O) => self.o,
             Some(game::Block::S) => self.s,
+            Some(game::Block::T) => self.t,
             Some(game::Block::Z) => self.z,
             None => self.e,
         }
@@ -82,7 +82,7 @@ impl Default for Settings {
                 game_x: 0,
                 game_y: 0,
                 block_size: 30,
-                block_gap: 5,
+                block_gap: 2,
             },
             palette: dark_light::detect()
                 .is_ok_and(|m| m == dark_light::Mode::Dark)
@@ -101,11 +101,11 @@ impl Palette {
             bg2: colours::SOFT_WHITE,
             e: colours::SILVER,
             i: colours::CYAN,
-            t: colours::PURPLE,
-            o: colours::YELLOW,
-            l: colours::ORANGE,
             j: colours::BLUE,
+            l: colours::ORANGE,
+            o: colours::YELLOW,
             s: colours::GREEN,
+            t: colours::PURPLE,
             z: colours::RED,
         }
     }

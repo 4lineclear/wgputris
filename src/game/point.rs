@@ -13,14 +13,27 @@ pub struct IPoint {
     pub x: i8,
     pub y: i8,
 }
+
+impl From<IPoint> for Point {
+    fn from(value: IPoint) -> Self {
+        Point::new(value.x.unsigned_abs(), value.y.unsigned_abs())
+    }
+}
+
+impl From<Point> for IPoint {
+    fn from(value: Point) -> Self {
+        IPoint::new((value.x as i8).abs(), (value.y as i8).abs())
+    }
+}
+
 impl IPoint {
-    fn new(x: i8, y: i8) -> Self {
+    pub const fn new(x: i8, y: i8) -> Self {
         Self { x, y }
     }
 }
 
 impl Point {
-    pub fn new(x: u8, y: u8) -> Self {
+    pub const fn new(x: u8, y: u8) -> Self {
         Self { x, y }
     }
 

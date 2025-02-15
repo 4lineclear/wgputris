@@ -57,14 +57,19 @@ pub fn game_quads(
         cy += block_gap;
         for b in game.block_iter(line) {
             cx += block_gap;
-
-            quads.push(quad(
-                styling.colour_block(b),
+            let mut quad = quad(
+                styling.colour_block(b.map(|(b, _)| b)),
                 cx,
                 cy,
                 *block_size,
                 *block_size,
-            ));
+            );
+            if b.is_some_and(|(_, g)| g) {
+                quad.colour.r *= 0.65;
+                quad.colour.g *= 0.65;
+                quad.colour.b *= 0.65;
+            }
+            quads.push(quad);
 
             cx += block_size;
         }
