@@ -2864,6 +2864,7 @@ dependencies = [
 name = "wgputris"
 version = "0.0.1"
 dependencies = [
+ "ahash",
  "anyhow",
  "bytemuck",
  "dark-light",

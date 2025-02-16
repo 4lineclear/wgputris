@@ -21,15 +21,14 @@ pub fn base_quads(
                 block_gap,
             },
     }: &styling::Settings,
-    game: &game::Game,
     base_layer: &mut rend::Layer,
 ) {
     let quad = quad(
         styling.bg2,
         *game_x,
         *game_y,
-        (block_size + block_gap) * game.board().line(0).blocks().len() as u32 + *block_gap,
-        (block_size + block_gap) * game.board().visible().len() as u32 + block_gap,
+        (block_size + block_gap) * game::BOARD_WIDTH as u32 + *block_gap,
+        (block_size + block_gap) * game::BOARD_VISIBLE_HEIGHT as u32 + block_gap,
     );
     base_layer.set_quads(vec![quad]);
 }

@@ -1,5 +1,6 @@
 pub mod draw;
 pub mod game;
+pub mod key;
 pub mod rend;
 pub mod styling;
 
@@ -14,21 +15,37 @@ use winit::{
 
 use crate::game::Game;
 
+use self::key::KeyStore;
+
+/// External actions
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Action {
+    Hold,
+    Place,
+    Rotate180,
+    RotateLeft,
+    RotateRight,
+    MoveRight,
+    MoveLeft,
+    MoveDown,
+    Exit,
+}
+
+impl Action {
+    pub fn repeatable(&self) -> bool {
+        use Action::*;
+        matches!(self, MoveRight | MoveLeft | MoveDown)
+    }
+}
+
 pub struct State {
     // TODO: use an overarching 'GameState' struct instead of directly
     // handling the game struct.
+    keys: Mutex<KeyStore>,
     game: Mutex<Game>,
     rend: rend::QRend,
     window: Arc<Window>,
     settings: styling::Settings,
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Rect {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
 }
 
 impl State {
@@ -62,15 +79,15 @@ impl State {
         let mut base_layer = rend.create_layer();
         let mut game_layer = rend.create_layer();
 
-        draw::base_quads(&settings, &game, &mut base_layer);
+        draw::base_quads(&settings, &mut base_layer);
         draw::game_quads(&settings, &game, &mut game_layer);
 
         rend.push_layer("base", base_layer);
         rend.push_layer("game", game_layer);
 
-        let game = Mutex::new(game);
         State {
-            game,
+            keys: Default::default(),
+            game: Mutex::new(game),
             rend,
             window,
             settings,
@@ -83,11 +100,7 @@ impl State {
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
-            self.settings.sizing.resize(
-                &self.game.lock().unwrap(),
-                new_size.width,
-                new_size.height,
-            );
+            self.settings.sizing.resize(new_size.width, new_size.height);
             self.draw();
             self.rend.resize(new_size.into());
         }
@@ -98,50 +111,35 @@ impl State {
             draw::game_quads(&self.settings, &self.game.lock().unwrap(), layer);
         }
         if let Some(layer) = self.rend.get_layer_mut("base") {
-            draw::base_quads(&self.settings, &self.game.lock().unwrap(), layer);
+            draw::base_quads(&self.settings, layer);
         }
     }
 
-    fn handle_key(&self, event: winit::event::KeyEvent) {
-        use winit::keyboard::KeyCode::*;
-        let winit::keyboard::PhysicalKey::Code(key_code) = event.physical_key else {
-            return;
+    fn handle_key(&self, event: winit::event::KeyEvent) -> bool {
+        let pressed = event.state.is_pressed();
+        let Some(key) = key::Key::from_event(event) else {
+            return false;
         };
-        if !event.state.is_pressed() {
-            return;
-        }
-        let mut log = true;
         let mut game = self.game.lock().unwrap();
-        match key_code {
-            Space => {
-                game.place();
+        for action in self.keys.lock().unwrap().apply_key(key, pressed) {
+            if apply_action(&mut game, action) {
+                return true;
             }
-            ArrowLeft => {
-                game.move_x(-1);
-            }
-            ArrowRight => {
-                game.move_x(1);
-            }
-            KeyZ => {
-                game.rotate(Some(true));
-            }
-            KeyX => {
-                game.rotate(Some(false));
-            }
-            KeyC => {
-                game.hold();
-            }
-            ArrowUp => {
-                game.rotate(None);
-            }
-            ArrowDown => {
-                game.move_down(1);
-            }
-            _ => log = false,
         }
-        if log {
-            // log::info!("{key_code:?}");
+        false
+    }
+
+    fn apply_pressed(&mut self) -> bool {
+        let key = self.keys.lock().unwrap();
+        let mut game = self.game.lock().unwrap();
+        if key.active() {
+            for action in key.get_actions() {
+                if apply_action(&mut game, action) {
+                    return true;
+                }
+            }
         }
+        false
     }
 
     fn render(&mut self) {
@@ -182,6 +180,21 @@ impl State {
     }
 }
 
+fn apply_action(game: &mut Game, action: Action) -> bool {
+    match action {
+        Action::Hold => game.hold(),
+        Action::Place => game.place(),
+        Action::Rotate180 => game.rotate(None),
+        Action::RotateLeft => game.rotate(Some(true)),
+        Action::RotateRight => game.rotate(Some(false)),
+        Action::MoveRight => game.move_x(false),
+        Action::MoveLeft => game.move_x(true),
+        Action::MoveDown => game.move_down(1),
+        Action::Exit => return true,
+    }
+    false
+}
+
 pub struct App {
     pub state: Option<State>,
 }
@@ -212,19 +225,22 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        let state = self.state.as_mut().expect("state missing");
-
-        let change = state.game.lock().unwrap().tick();
-        if change {
-            // log::info!("change!");
-            state.render();
-            state.get_window().request_redraw();
+        if event_loop.exiting() {
+            return;
         }
+
+        let state = self.state.as_mut().expect("state missing");
+        state.game.lock().unwrap().tick();
+
+        if state.apply_pressed() {
+            event_loop.exit();
+        }
+
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
-            WindowEvent::RedrawRequested if !change => {
+            WindowEvent::RedrawRequested => {
                 state.render();
                 state.get_window().request_redraw();
             }
@@ -232,7 +248,9 @@ impl ApplicationHandler for App {
                 state.resize(size); // always followed by a redraw request
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                state.handle_key(event);
+                if state.handle_key(event) {
+                    event_loop.exit();
+                }
             }
             _ => (),
         }

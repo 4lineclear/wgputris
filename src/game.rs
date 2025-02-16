@@ -1,5 +1,5 @@
-use std::time::Duration;
 use std::time::Instant;
+use std::u8;
 
 use rand::{seq::SliceRandom, RngCore, SeedableRng};
 use rand_xoshiro::Xoshiro256Plus;
@@ -34,9 +34,23 @@ enum MinoAction {
 
 #[derive(Debug, Clone)]
 struct GameTime {
+    // variable user timings
+    right: Timings,
+    left: Timings,
+    down: Timings,
+    // variable system timings
+    gravity: u16,
+    // other timings
     start: Instant,
     now: Instant,
-    drop: Duration,
+}
+
+#[derive(Debug, Default, Clone)]
+struct Timings {
+    das_limit: u16,
+    arr_limit: u16,
+    das: u16,
+    arr: u16,
 }
 
 #[derive(Debug)]
@@ -111,14 +125,6 @@ impl Game {
         }
     }
 
-    fn apply_action(&mut self, action: Action) -> bool {
-        use Action::*;
-        match action {
-            MinoAction(ma) => self.move_mino(ma),
-            Idle => false,
-        }
-    }
-
     pub fn hold(&mut self) {
         if self.bag.is_held {
             return;
@@ -186,7 +192,7 @@ impl Game {
             .mino
             .real_points()
             .iter()
-            .all(|&p| self.board().check_block(p))
+            .all(|&p| self.board.check_block(p))
         {
             self.mino.ori = ori;
         } else {
@@ -221,7 +227,7 @@ impl Game {
         prev.pos != self.mino.pos || self.calc_ghost()
     }
 
-    pub fn calc_ghost(&mut self) -> bool {
+    fn calc_ghost(&mut self) -> bool {
         let mut new = self.mino;
         loop {
             let ngpos = self.try_move_mino(new, 0, 1);
@@ -238,8 +244,8 @@ impl Game {
         }
     }
 
-    pub fn move_x(&mut self, amount: i8) {
-        self.move_mino(MinoAction::Horizontal(amount));
+    pub fn move_x(&mut self, left: bool) {
+        self.move_mino(MinoAction::Horizontal(if left { -1 } else { 1 }));
     }
 
     pub fn move_down(&mut self, amount: i8) {
@@ -247,21 +253,17 @@ impl Game {
     }
 
     pub fn tick(&mut self) -> bool {
-        let action = self.time.tick();
-        self.apply_action(action) || self.calc_ghost()
+        use Action::*;
+
+        (match self.time.tick() {
+            MinoAction(ma) => self.move_mino(ma),
+            Idle => false,
+        }) || self.calc_ghost()
     }
 
     pub fn start(&mut self) {
         self.rng = Xoshiro256Plus::seed_from_u64(self.seed);
         self.time.start = Instant::now();
-    }
-
-    pub fn mino(&self) -> Mino {
-        self.mino
-    }
-
-    pub fn board(&self) -> Board {
-        self.board
     }
 
     pub fn block_iter<'a>(&'a self, y: u8) -> BlockIter<'a> {
@@ -283,6 +285,7 @@ pub struct Board([Line; BOARD_HEIGHT as usize]);
 
 pub const TOTAL_BLOCKS: u8 = BOARD_HEIGHT * BOARD_WIDTH;
 pub const VISIBLE_START: u8 = 4;
+pub const BOARD_VISIBLE_HEIGHT: u8 = BOARD_HEIGHT - VISIBLE_START;
 pub const BOARD_HEIGHT: u8 = 24;
 pub const BOARD_WIDTH: u8 = 10;
 
@@ -370,22 +373,54 @@ fn random_minos(rng: &mut Xoshiro256Plus) -> [Block; 7] {
 impl GameTime {
     fn new(now: Instant) -> Self {
         Self {
+            // das_limit: 100,
+            right: Timings::default(),
+            left: Timings::default(),
+            down: Timings::default(),
             start: now,
             now,
-            drop: Duration::new(0, 0),
+            gravity: 0,
         }
+    }
+
+    fn timings(&mut self, left: Option<bool>) -> &mut Timings {
+        match left {
+            Some(true) => &mut self.left,
+            Some(false) => &mut self.right,
+            None => &mut self.down,
+        }
+    }
+
+    fn reset_timing(&mut self, left: Option<bool>) {
+        let timings = self.timings(left);
+        timings.das = 0;
+        timings.arr = 0;
+    }
+
+    fn count_move(&mut self, left: Option<bool>, time: u16) -> u8 {
+        let timings = self.timings(left);
+        timings.das += time;
+        if timings.das < timings.das_limit {
+            timings.arr = 0;
+            return (timings.das == time) as u8;
+        }
+        timings.arr += time;
+
+        let amount = timings.arr / timings.arr_limit;
+        timings.arr %= timings.arr_limit;
+        u8::try_from(amount).unwrap_or(u8::MAX)
     }
 
     pub fn tick(&mut self) -> Action {
         let now = Instant::now();
         let diff = now - self.now;
         self.now = now;
-        self.drop += diff;
+        self.gravity += diff.as_millis() as u16;
 
-        if self.drop.as_millis() > 1_600 {
+        if self.gravity > 1_600 {
             let mut drop = 0;
-            while self.drop.as_millis() > 1_600 {
-                self.drop -= Duration::from_millis(1_600);
+            while self.gravity > 1_600 {
+                self.gravity -= 1_600;
                 drop += 1;
             }
             Action::MinoAction(MinoAction::Vertical(drop))

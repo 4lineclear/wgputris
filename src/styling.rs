@@ -65,9 +65,9 @@ pub struct Sizing {
 }
 
 impl Sizing {
-    pub fn resize(&mut self, game: &game::Game, width: u32, height: u32) {
-        let n_wide = game.board().line(0usize).blocks().len() as u32;
-        let n_tall = game.board().visible().len() as u32;
+    pub fn resize(&mut self, width: u32, height: u32) {
+        let n_wide = game::BOARD_WIDTH as u32;
+        let n_tall = game::BOARD_VISIBLE_HEIGHT as u32;
         let board_width = (self.block_gap + self.block_size) * n_wide;
         let board_height = (self.block_gap + self.block_size) * n_tall;
         self.game_x = (width / 2).saturating_sub(board_width / 2);
