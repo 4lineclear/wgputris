@@ -1,3 +1,7 @@
+// TODO: create ability to reserve extra.
+
+use wgpu::util::DeviceExt;
+
 #[derive(Debug)]
 pub struct Layer {
     label: &'static str,
@@ -27,7 +31,7 @@ impl Layer {
         let contents = bytemuck::cast_slice(&vertices);
         let byte_len = contents.len();
         if self.byte_cap < byte_len {
-            self.buffer = create_buffer(self.label, device, byte_len);
+            self.buffer = create_buffer_init(self.label, device, contents);
             self.byte_cap = byte_len;
         } else if let Some(mut size) = wgpu::BufferSize::new(byte_len as u64)
             .and_then(|size| queue.write_buffer_with(&self.buffer, 0, size))
@@ -80,11 +84,22 @@ impl Layer {
     }
 }
 
+const BUFFER_USAGES: wgpu::BufferUsages =
+    wgpu::BufferUsages::VERTEX.union(wgpu::BufferUsages::COPY_DST);
+
 fn create_buffer(label: &str, device: &wgpu::Device, byte_cap: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size: byte_cap as u64,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        usage: BUFFER_USAGES,
         mapped_at_creation: false,
+    })
+}
+
+fn create_buffer_init(label: &str, device: &wgpu::Device, contents: &[u8]) -> wgpu::Buffer {
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(label),
+        contents,
+        usage: BUFFER_USAGES,
     })
 }

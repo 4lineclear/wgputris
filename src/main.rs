@@ -6,14 +6,13 @@ use winit::event_loop::{ControlFlow, EventLoop};
 // keep two quad buckets, one for void-like, one normal.
 // grow meshes by iterating over the void-like.
 
-//
 fn main() {
     #[cfg(debug_assertions)]
     setup_logging();
 
     let mut app = wgputris::App::new();
     let event_loop = EventLoop::new().unwrap();
-    event_loop.set_control_flow(ControlFlow::Poll); // fast rendering
+    event_loop.set_control_flow(ControlFlow::Wait); // fast rendering
     event_loop.run_app(&mut app).unwrap();
 }
 
@@ -23,6 +22,7 @@ fn main() {
 // so we have this instead
 #[cfg(debug_assertions)]
 fn setup_logging() {
+    std::env::set_var("RUST_BACKTRACE", "1");
     std::env::set_var("RUST_LOG", "wgputris=info,wgpu=error");
     env_logger::init_from_env(env_logger::Env::new());
 }

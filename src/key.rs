@@ -1,13 +1,12 @@
-use std::collections::{HashMap, HashSet};
-
+use dashmap::{DashMap, DashSet};
 use winit::event::KeyEvent;
 
 use crate::Action;
 
 #[derive(Debug, Clone)]
 pub struct KeyStore {
-    keys: HashMap<Key, Action>,
-    pressed: HashSet<Key>,
+    keys: DashMap<Key, Action, ahash::RandomState>,
+    pressed: DashSet<Key, ahash::RandomState>,
 }
 
 impl Default for KeyStore {
@@ -39,27 +38,33 @@ impl KeyStore {
     pub fn active(&self) -> bool {
         !self.pressed.is_empty()
     }
-    pub fn apply_key(&mut self, key: Key, pressed: bool) -> Vec<Action> {
-        let new_key = if pressed {
+    pub fn apply_key(&self, key: Key, pressed: bool) -> Option<(Action, bool)> {
+        let action = if pressed {
             self.keys
                 .get(&key)
                 .filter(|ea| ea.repeatable() || !self.pressed.contains(&key))
-                .copied()
+                .map(|a| (*a, true))
         } else {
-            self.pressed.remove(&key);
-            None
+            self.pressed
+                .remove(&key)
+                .and_then(|key| (self.keys.get(&key).map(|a| (*a, false))))
         };
-        let actions = self.get_actions().chain(new_key).collect();
         if pressed {
             self.pressed.insert(key);
         }
-        actions
+        action
     }
     pub fn get_actions<'a>(&'a self) -> impl Iterator<Item = Action> + 'a {
         self.pressed
             .iter()
-            .filter_map(|k| self.keys.get(k).copied().filter(Action::repeatable))
+            .filter_map(|k| self.keys.get(&k).filter(|a| a.repeatable()).map(|a| *a))
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SentKey {
+    pub pressed: bool,
+    pub key: Key,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -68,17 +73,21 @@ pub enum Key {
     Numeric(u32),
 }
 
-impl Key {
+impl SentKey {
     pub fn from_event(event: KeyEvent) -> Option<Self> {
         use winit::keyboard::NativeKeyCode;
         use winit::keyboard::PhysicalKey;
-        match event.physical_key {
+        let key = match event.physical_key {
             PhysicalKey::Code(kc) => Some(Key::Code(kc)),
             PhysicalKey::Unidentified(nkc) => match nkc {
                 NativeKeyCode::Unidentified => None,
                 NativeKeyCode::Android(c) | NativeKeyCode::Xkb(c) => Some(Key::Numeric(c)),
                 NativeKeyCode::MacOS(c) | NativeKeyCode::Windows(c) => Some(Key::Numeric(c as u32)),
             },
-        }
+        }?;
+        Some(Self {
+            pressed: event.state.is_pressed(),
+            key,
+        })
     }
 }

@@ -1,3 +1,5 @@
+use std::ops::Mul;
+
 use crate::game;
 
 #[derive(Debug)]
@@ -32,6 +34,19 @@ pub struct Colour {
     pub a: f32,
 }
 
+impl Mul<f32> for Colour {
+    type Output = Self;
+
+    fn mul(self, rhs: f32) -> Self::Output {
+        Self {
+            r: self.r * rhs,
+            g: self.g * rhs,
+            b: self.b * rhs,
+            a: self.a,
+        }
+    }
+}
+
 impl Colour {
     pub fn rgb(self) -> [f32; 3] {
         [self.r, self.g, self.b]
@@ -61,15 +76,14 @@ pub struct Sizing {
     pub game_x: u32,
     pub game_y: u32,
     pub block_size: u32,
-    pub block_gap: u32,
 }
 
 impl Sizing {
     pub fn resize(&mut self, width: u32, height: u32) {
         let n_wide = game::BOARD_WIDTH as u32;
         let n_tall = game::BOARD_VISIBLE_HEIGHT as u32;
-        let board_width = (self.block_gap + self.block_size) * n_wide;
-        let board_height = (self.block_gap + self.block_size) * n_tall;
+        let board_width = self.block_size * n_wide;
+        let board_height = self.block_size * n_tall;
         self.game_x = (width / 2).saturating_sub(board_width / 2);
         self.game_y = (height / 2).saturating_sub(board_height / 2);
     }
@@ -82,7 +96,6 @@ impl Default for Settings {
                 game_x: 0,
                 game_y: 0,
                 block_size: 30,
-                block_gap: 2,
             },
             palette: dark_light::detect()
                 .is_ok_and(|m| m == dark_light::Mode::Dark)

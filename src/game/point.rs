@@ -53,14 +53,25 @@ impl Add for Point {
     }
 }
 
-impl Add<IPoint> for Point {
+impl Add for IPoint {
     type Output = Self;
 
-    fn add(self, rhs: IPoint) -> Self::Output {
+    fn add(self, rhs: Self) -> Self::Output {
         Self {
-            x: self.x.saturating_add_signed(rhs.x),
-            y: self.y.saturating_add_signed(rhs.y),
+            x: self.x.saturating_add(rhs.x),
+            y: self.y.saturating_add(rhs.y),
         }
+    }
+}
+
+impl Add<IPoint> for Point {
+    type Output = Option<IPoint>;
+
+    fn add(self, rhs: IPoint) -> Self::Output {
+        Some(IPoint {
+            x: (self.x as i8).checked_add(rhs.x)?,
+            y: (self.y as i8).checked_add(rhs.y)?,
+        })
     }
 }
 
@@ -90,4 +101,25 @@ impl From<(i8, i8)> for IPoint {
     fn from((x, y): (i8, i8)) -> Self {
         Self::new(x, y)
     }
+}
+
+pub fn maybe_cast_points(value: [Option<IPoint>; 4]) -> Option<[Point; 4]> {
+    let mut points = [Point::default(); 4];
+    for i in 0..4 {
+        let p = value[i]?;
+        if p.x < 0 || p.y < 0 {
+            return None;
+        }
+        points[i] = Point::new(p.x as u8, p.y as u8);
+    }
+    Some(points)
+}
+
+pub fn cast_points(value: [IPoint; 4]) -> Option<[Point; 4]> {
+    let mut points = [Point::default(); 4];
+    for i in 0..4 {
+        let p = value[i];
+        points[i] = Point::new(u8::try_from(p.x).ok()?, u8::try_from(p.y).ok()?);
+    }
+    Some(points)
 }

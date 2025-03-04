@@ -3,8 +3,12 @@ pub mod game;
 pub mod key;
 pub mod rend;
 pub mod styling;
+pub mod time;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    mpsc::{self},
+    Arc, Mutex,
+};
 
 use winit::{
     application::ApplicationHandler,
@@ -13,9 +17,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::game::Game;
-
-use self::key::KeyStore;
+const RUNNING_ORDER: std::sync::atomic::Ordering = std::sync::atomic::Ordering::Relaxed;
 
 /// External actions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -41,16 +43,49 @@ impl Action {
 pub struct State {
     // TODO: use an overarching 'GameState' struct instead of directly
     // handling the game struct.
-    keys: Mutex<KeyStore>,
-    game: Mutex<Game>,
     rend: rend::QRend,
+    keys: mpsc::Sender<key::SentKey>,
+    game: Arc<Mutex<game::Game>>,
     window: Arc<Window>,
     settings: styling::Settings,
+    ctx: Arc<Context>,
+}
+
+struct Context {
+    run: AtomicRunState,
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        Self {
+            run: AtomicRunState::new(RunState::Running),
+        }
+    }
+}
+
+#[atomic_enum::atomic_enum]
+enum RunState {
+    Running,
+    EndScheduled,
+    Ended,
+}
+
+impl RunState {
+    fn running(&self) -> bool {
+        matches!(self, Self::Running)
+    }
+    fn ended(&self) -> bool {
+        matches!(self, Self::Ended)
+    }
 }
 
 impl State {
-    pub async fn new(window: Arc<Window>) -> State {
-        let game = Game::default();
+    async fn new(
+        window: Arc<Window>,
+        keys: mpsc::Sender<key::SentKey>,
+        game: Arc<Mutex<game::Game>>,
+        ctx: Arc<Context>,
+    ) -> State {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
@@ -74,23 +109,17 @@ impl State {
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
         let mut rend = rend::QRend::new(size.into(), device, queue, surface_format, surface);
-        let settings = styling::Settings::default();
 
-        let mut base_layer = rend.create_layer();
-        let mut game_layer = rend.create_layer();
-
-        draw::base_quads(&settings, &mut base_layer);
-        draw::game_quads(&settings, &game, &mut game_layer);
-
-        rend.push_layer("base", base_layer);
-        rend.push_layer("game", game_layer);
+        rend.push_layer("base", rend.create_layer());
+        rend.push_layer("game", rend.create_layer());
 
         State {
-            keys: Default::default(),
-            game: Mutex::new(game),
             rend,
+            keys,
+            game,
             window,
-            settings,
+            settings: styling::Settings::default(),
+            ctx,
         }
     }
 
@@ -115,33 +144,6 @@ impl State {
         }
     }
 
-    fn handle_key(&self, event: winit::event::KeyEvent) -> bool {
-        let pressed = event.state.is_pressed();
-        let Some(key) = key::Key::from_event(event) else {
-            return false;
-        };
-        let mut game = self.game.lock().unwrap();
-        for action in self.keys.lock().unwrap().apply_key(key, pressed) {
-            if apply_action(&mut game, action) {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn apply_pressed(&mut self) -> bool {
-        let key = self.keys.lock().unwrap();
-        let mut game = self.game.lock().unwrap();
-        if key.active() {
-            for action in key.get_actions() {
-                if apply_action(&mut game, action) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
     fn render(&mut self) {
         self.draw();
         self.rend.prepare();
@@ -162,12 +164,7 @@ impl State {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: f64::from(self.settings.palette.bg.r),
-                            g: f64::from(self.settings.palette.bg.g),
-                            b: f64::from(self.settings.palette.bg.b),
-                            a: f64::from(self.settings.palette.bg.a),
-                        }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color::default()),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -178,21 +175,6 @@ impl State {
         self.rend.queue.submit([encoder.finish()]);
         output.present();
     }
-}
-
-fn apply_action(game: &mut Game, action: Action) -> bool {
-    match action {
-        Action::Hold => game.hold(),
-        Action::Place => game.place(),
-        Action::Rotate180 => game.rotate(None),
-        Action::RotateLeft => game.rotate(Some(true)),
-        Action::RotateRight => game.rotate(Some(false)),
-        Action::MoveRight => game.move_x(false),
-        Action::MoveLeft => game.move_x(true),
-        Action::MoveDown => game.move_down(1),
-        Action::Exit => return true,
-    }
-    false
 }
 
 pub struct App {
@@ -217,42 +199,115 @@ impl ApplicationHandler for App {
                 )
                 .unwrap(),
         );
+        let (sender, receiver) = mpsc::channel();
+        let game: Arc<Mutex<game::Game>> = Default::default();
+        let ctx: Arc<Context> = Arc::default();
 
-        self.state = Some(pollster::block_on(State::new(window.clone())));
+        self.state = Some(pollster::block_on(State::new(
+            window.clone(),
+            sender,
+            game.clone(),
+            ctx.clone(),
+        )));
 
         window.set_visible(true);
+        window.focus_window();
         window.request_redraw();
+
+        game_thread(window, receiver, game, ctx);
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         if event_loop.exiting() {
             return;
         }
-
         let state = self.state.as_mut().expect("state missing");
-        state.game.lock().unwrap().tick();
-
-        if state.apply_pressed() {
-            event_loop.exit();
+        let run_state = state.ctx.run.load(RUNNING_ORDER);
+        if !run_state.running() {
+            if !run_state.ended() {
+                state.ctx.run.store(RunState::Ended, RUNNING_ORDER);
+                event_loop.exit();
+            }
+            return;
         }
-
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
                 state.render();
-                state.get_window().request_redraw();
             }
             WindowEvent::Resized(size) => {
                 state.resize(size); // always followed by a redraw request
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                if state.handle_key(event) {
-                    event_loop.exit();
+                if let Some(sk) = key::SentKey::from_event(event) {
+                    state.keys.send(sk).unwrap();
                 }
             }
             _ => (),
         }
     }
+}
+
+fn game_thread(
+    window: Arc<Window>,
+    keyr: mpsc::Receiver<key::SentKey>,
+    game: Arc<Mutex<game::Game>>,
+    ctx: Arc<Context>,
+) {
+    use std::ops::ControlFlow;
+    let keys = key::KeyStore::default();
+    time::run::<(), _, _, _>(
+        move |action, _| {
+            let mut game = game.lock().unwrap();
+            for key in keyr.try_iter() {
+                if let Some((action, pressed)) = keys.apply_key(key.key, key.pressed) {
+                    if action == Action::Exit {
+                        ctx.run.store(RunState::EndScheduled, RUNNING_ORDER);
+                    }
+                    game.apply_action(action, pressed);
+                }
+            }
+            for _ in 0..action.ticks {
+                game.tick(action.now);
+                for action in keys.get_actions() {
+                    game.apply_action(action, true);
+                }
+            }
+            ControlFlow::Continue(())
+        },
+        move |_, _| {
+            window.request_redraw();
+        },
+        120,
+    );
+    // let mut timer = time::Timer::new(1200);
+    // let mut loops = 0;
+    // std::thread::spawn(move || loop {
+    //     let sleep_dur = timer.sleep_dur();
+    //     if !sleep_dur.is_zero() {
+    //         std::thread::sleep(sleep_dur);
+    //     }
+    //     let (_, action) = timer.tick();
+    //     for _ in 0..action.ticks {
+    //         // update game here
+    //     }
+    //     if action.render {
+    //         window.request_redraw();
+    //     }
+    //
+    //     log::info!(
+    //         "{loops}: tick drift: {}, render drift: {}, elapsed: {}, actual: {}",
+    //         timer.tick_drift(),
+    //         timer.render_drift(),
+    //         timer.elapsed().as_millis(),
+    //         timer.start().elapsed().as_millis(),
+    //     );
+    //
+    //     loops += 1;
+    //     if loops == 10000 {
+    //         break;
+    //     }
+    // });
 }
