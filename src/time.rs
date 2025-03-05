@@ -1,10 +1,8 @@
-use std::cell::LazyCell;
 use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 pub const TICK_RATE: usize = 120;
-pub const TICK_DURATION: LazyCell<Duration> =
-    LazyCell::new(|| Duration::from_secs_f64(1.0 / TICK_RATE as f64));
+pub static TICK_DURATION: Duration = Duration::from_nanos(8333333);
 
 #[derive(Debug, Clone, Copy)]
 pub struct TimeAction {
@@ -51,7 +49,7 @@ impl Timer {
             elapsed: Duration::default(),
             now,
             start: now,
-            next_tick: now + *TICK_DURATION,
+            next_tick: now + TICK_DURATION,
             next_render: now + render_duration,
             ticks: 0,
             renders: 0,
@@ -70,7 +68,7 @@ impl Timer {
         let (render, ticks) = self.tick_count(now);
         let sleep = self.next_tick.min(self.next_render);
         if ticks != 0 {
-            self.next_tick = diff_time(now, *TICK_DURATION, self.next_tick);
+            self.next_tick = diff_time(now, TICK_DURATION, self.next_tick);
             self.ticks += ticks;
         }
         if render {
@@ -99,7 +97,7 @@ impl Timer {
         }
         while self.next_tick < now {
             ticks += 1;
-            self.next_tick += *TICK_DURATION;
+            self.next_tick += TICK_DURATION;
         }
         (render, ticks)
     }

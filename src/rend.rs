@@ -1,17 +1,21 @@
+use std::rc::Rc;
+use std::sync::Mutex;
+
 use bytemuck::{Pod, Zeroable};
 use indexmap::IndexMap;
 use wgpu::util::DeviceExt;
 
 use crate::styling::Colour;
 
-pub use self::layer::Layer;
+pub use self::quad_layer::QuadLayer;
+pub use self::text_layer::{TextLayer, TextLayerDesc};
 
-pub mod layer;
+pub mod quad_layer;
+pub mod text_layer;
 
 #[derive(Debug)]
-pub struct QRend {
+pub struct Rend {
     size: ScreenSize,
-    layers: IndexMap<&'static str, Layer>,
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub surface: wgpu::Surface<'static>,
@@ -19,6 +23,22 @@ pub struct QRend {
     uniform_buffer: wgpu::Buffer,
     uniform_bind: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
+    qrend: QRend,
+    trend: TRend,
+}
+
+struct TRend {
+    font_system: Rc<Mutex<glyphon::FontSystem>>,
+    swash_cache: glyphon::SwashCache,
+    viewport: glyphon::Viewport,
+    atlas: glyphon::TextAtlas,
+    text_renderer: glyphon::TextRenderer,
+    layers: IndexMap<&'static str, TextLayer>,
+}
+
+#[derive(Debug, Default)]
+pub struct QRend {
+    layers: IndexMap<&'static str, QuadLayer>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -43,18 +63,23 @@ pub struct Vertex {
 pub struct ScreenSize {
     width: u32,
     height: u32,
+    scale: f64,
 }
 
-impl From<winit::dpi::PhysicalSize<u32>> for ScreenSize {
-    fn from(winit::dpi::PhysicalSize { width, height }: winit::dpi::PhysicalSize<u32>) -> Self {
-        Self { width, height }
+impl ScreenSize {
+    pub fn new(size: winit::dpi::PhysicalSize<u32>, scale: f64) -> Self {
+        Self {
+            width: size.width,
+            height: size.height,
+            scale,
+        }
     }
 }
 
 const UNIFORM_SIZE: std::num::NonZero<u64> =
     wgpu::BufferSize::new(std::mem::size_of::<ScreenSize>() as u64).unwrap();
 
-impl QRend {
+impl Rend {
     pub fn new(
         size: ScreenSize,
         device: wgpu::Device,
@@ -66,7 +91,8 @@ impl QRend {
         let pipeline = create_pipeline(&device, format, uniform_layout);
         let this = Self {
             size,
-            layers: IndexMap::new(),
+            qrend: QRend::default(),
+            trend: TRend::new(&device, &queue, format),
             queue,
             device,
             surface,
@@ -106,31 +132,56 @@ impl QRend {
     pub fn render(&mut self, render_pass: &mut wgpu::RenderPass) {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.uniform_bind, &[]);
-        self.layers
-            .values()
-            .filter(|l| !l.is_empty())
-            .for_each(|layer| {
-                render_pass.set_vertex_buffer(0, layer.buffer().slice(..));
-                render_pass.draw(0..layer.vertices() as u32, 0..1);
-            });
+        self.qrend.render(render_pass);
+        self.trend.render(&self.size, &self.queue, render_pass);
     }
 
-    pub fn create_layer(&self) -> Layer {
-        Layer::new("wgputris.rend.layer", &self.device, 0)
+    pub fn create_quad_layer(&self, name: &'static str) -> QuadLayer {
+        QuadLayer::new(name, "wgputris.rend.layer", &self.device, 0)
     }
 
-    pub fn push_layer(&mut self, label: &'static str, layer: Layer) {
-        self.layers.insert(label, layer);
+    pub fn push_quad_layer(&mut self, layer: QuadLayer) {
+        self.qrend.layers.insert(layer.name(), layer);
     }
 
-    pub fn get_layer_mut(&mut self, label: &'static str) -> Option<&mut Layer> {
-        self.layers.get_mut(label)
+    pub fn gen_quad_layer(&mut self, name: &'static str) {
+        self.push_quad_layer(self.create_quad_layer(name));
+    }
+
+    pub fn create_text_layer(
+        &mut self,
+        metrics: glyphon::Metrics,
+        desc: TextLayerDesc,
+    ) -> TextLayer {
+        let buffer = glyphon::Buffer::new(&mut self.trend.font_system.lock().unwrap(), metrics);
+        TextLayer::new(buffer, desc, self.trend.font_system.clone())
+    }
+
+    pub fn push_text_layer(&mut self, layer: TextLayer) {
+        self.trend.layers.insert(layer.name(), layer);
+    }
+
+    pub fn gen_text_layer(&mut self, metrics: glyphon::Metrics, desc: TextLayerDesc) {
+        let layer = self.create_text_layer(metrics, desc);
+        self.push_text_layer(layer);
+    }
+
+    pub fn get_quad_mut(&mut self, label: &'static str) -> Option<&mut QuadLayer> {
+        self.qrend.layers.get_mut(label)
+    }
+    pub fn get_text_mut(&mut self, label: &'static str) -> Option<&mut TextLayer> {
+        self.trend.layers.get_mut(label)
     }
 
     pub fn prepare(&mut self) {
-        for (_, layer) in &mut self.layers {
+        for (_, layer) in &mut self.qrend.layers {
             layer.prepare(&self.device, &self.queue);
         }
+        self.trend.prepare(&self.device, &self.queue);
+    }
+
+    pub fn finish(&mut self) {
+        self.trend.finish();
     }
 }
 
@@ -172,7 +223,7 @@ pub const BYTES_PER_QUAD: usize = VERTICES_PER_QUAD * std::mem::size_of::<Vertex
 
 impl Vertex {
     const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array!(
-        // Color
+        // Colour
         0 => Float32x4,
         // Position + Size
         1 => Uint32x2,
@@ -212,6 +263,12 @@ impl Vertex {
         vertices
     }
 }
+
+const MULTISAMPLE_STATE: wgpu::MultisampleState = wgpu::MultisampleState {
+    count: 1,
+    mask: !0,
+    alpha_to_coverage_enabled: false,
+};
 
 fn create_pipeline(
     device: &wgpu::Device,
@@ -260,12 +317,110 @@ fn create_pipeline(
             conservative: false,
         },
         depth_stencil: None,
-        multisample: wgpu::MultisampleState {
-            count: 1,
-            mask: !0,
-            alpha_to_coverage_enabled: false,
-        },
+        multisample: MULTISAMPLE_STATE,
         multiview: None,
         cache: None,
     })
+}
+
+impl QRend {
+    fn render(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        for layer in self.layers.values().filter(|l| !l.is_empty()) {
+            layer.render(render_pass)
+        }
+    }
+}
+
+impl TRend {
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        swapchain_format: wgpu::TextureFormat,
+    ) -> TRend {
+        use glyphon::*;
+        let font_system = Rc::new(Mutex::new(FontSystem::new()));
+        let swash_cache = SwashCache::new();
+        let cache = Cache::new(&device);
+        let viewport = Viewport::new(&device, &cache);
+        let mut atlas = TextAtlas::new(&device, &queue, &cache, swapchain_format);
+        let text_renderer = TextRenderer::new(&mut atlas, &device, MULTISAMPLE_STATE, None);
+
+        // let mut text_buffer = Buffer::new(&mut font_system, Metrics::new(14.0, 26.0));
+        // let physical_width = (size.width as f64 * size.scale) as f32;
+        // let physical_height = (size.height as f64 * size.scale) as f32;
+        //
+        // text_buffer.set_size(
+        //     &mut font_system,
+        //     Some(physical_width),
+        //     Some(physical_height),
+        // );
+        // const TEXT: &str = "Hello world! 👋\nThis is rendered with 🦅 glyphon 🦁\nThe text below should be partially clipped.\na b c d e f g h i j k l m n o p q r s t u v w x y z";
+        // text_buffer.set_text(
+        //     &mut font_system,
+        //     TEXT,
+        //     Attrs::new()
+        //         .family(Family::SansSerif)
+        //         .color(glyphon::Color::rgba(255, 255, 255, 255)),
+        //     Shaping::Advanced,
+        // );
+        // text_buffer.shape_until_scroll(&mut font_system, false);
+
+        TRend {
+            font_system,
+            swash_cache,
+            viewport,
+            atlas,
+            text_renderer,
+            layers: IndexMap::default(),
+        }
+    }
+
+    pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.text_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system.lock().unwrap(),
+                &mut self.atlas,
+                &self.viewport,
+                self.layers.values().map(TextLayer::to_area),
+                &mut self.swash_cache,
+            )
+            .unwrap();
+    }
+
+    pub fn finish(&mut self) {
+        self.atlas.trim();
+    }
+
+    fn render(
+        &mut self,
+        size: &ScreenSize,
+        queue: &wgpu::Queue,
+        render_pass: &mut wgpu::RenderPass<'_>,
+    ) {
+        self.viewport.update(
+            &queue,
+            glyphon::Resolution {
+                width: size.width,
+                height: size.height,
+            },
+        );
+        self.text_renderer
+            .render(&self.atlas, &self.viewport, render_pass)
+            .unwrap();
+    }
+}
+
+impl std::fmt::Debug for TRend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TRend")
+            .field("font_system", &self.font_system)
+            .field("swash_cache", &self.swash_cache)
+            .field("viewport", &self.viewport)
+            .field("atlas", &())
+            .field("text_renderer", &())
+            .field("layers", &self.layers)
+            .finish()
+    }
 }

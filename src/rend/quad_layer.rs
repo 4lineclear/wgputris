@@ -3,7 +3,8 @@
 use wgpu::util::DeviceExt;
 
 #[derive(Debug)]
-pub struct Layer {
+pub struct QuadLayer {
+    name: &'static str,
     label: &'static str,
     quads: Vec<super::Quad>,
     buffer: wgpu::Buffer,
@@ -11,16 +12,27 @@ pub struct Layer {
     changed: bool,
 }
 
-impl Layer {
-    pub fn new(label: &'static str, device: &wgpu::Device, quads: usize) -> Self {
+impl QuadLayer {
+    pub fn new(
+        name: &'static str,
+        label: &'static str,
+        device: &wgpu::Device,
+        quads: usize,
+    ) -> Self {
         let byte_cap = quads * super::BYTES_PER_QUAD;
         Self {
+            name,
             label,
             quads: Vec::with_capacity(quads),
             buffer: create_buffer(label, device, byte_cap),
             byte_cap,
             changed: false,
         }
+    }
+
+    pub fn render(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        render_pass.set_vertex_buffer(0, self.buffer().slice(..));
+        render_pass.draw(0..self.vertices() as u32, 0..1);
     }
 
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
@@ -65,22 +77,8 @@ impl Layer {
         self.quads.len() * super::VERTICES_PER_QUAD
     }
 
-    pub fn with_quads(label: &'static str, device: &wgpu::Device, quads: Vec<super::Quad>) -> Self {
-        use wgpu::util::DeviceExt;
-        let vertices = super::Vertex::from_quads(&quads);
-        let contents = bytemuck::cast_slice(&vertices);
-        let byte_cap = contents.len();
-        Self {
-            label,
-            buffer: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            }),
-            quads,
-            byte_cap,
-            changed: false,
-        }
+    pub fn name(&self) -> &'static str {
+        self.name
     }
 }
 

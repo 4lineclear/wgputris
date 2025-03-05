@@ -54,7 +54,7 @@ impl KeyStore {
         }
         action
     }
-    pub fn get_actions<'a>(&'a self) -> impl Iterator<Item = Action> + 'a {
+    pub fn get_actions(&self) -> impl Iterator<Item = Action> + '_ {
         self.pressed
             .iter()
             .filter_map(|k| self.keys.get(&k).filter(|a| a.repeatable()).map(|a| *a))

@@ -1,5 +1,4 @@
 use std::time::Instant;
-use std::u8;
 
 use rand::{seq::SliceRandom, RngCore, SeedableRng};
 use rand_xoshiro::Xoshiro256Plus;
@@ -22,49 +21,52 @@ pub struct Game {
 
 #[derive(Debug)]
 enum TimeAction {
-    MinoAction(MinoAction),
+    Drop(i8),
     Idle,
 }
 
-#[derive(Debug)]
-enum MinoAction {
-    Horizontal(i8),
-    Vertical(i8),
-}
-
 #[derive(Debug, Clone)]
-#[allow(unused)]
 struct GameTime {
     // variable user timings
     right: Timings,
     left: Timings,
     down: Timings,
+    hard_drop: HardDrop,
     // variable system timings
     gravity: u32,
-    next_gravity: u32,
+    grav_goal: u32,
     ticks: u32,
     // other timings
     start: Instant,
     now: Instant,
 }
 
+#[derive(Debug, Clone)]
+struct HardDrop {
+    scheduled: bool,
+    goal: u32,
+}
+
 #[derive(Debug, Default, Clone)]
 #[allow(unused)]
 struct Timings {
-    das_limit: u16,
-    arr_limit: u16,
-    das: u16,
-    arr: u16,
+    das: Ticker,
+    arr: Ticker,
 }
+
 impl Timings {
     fn new(das_limit: u16, arr_limit: u16) -> Self {
         Self {
-            das_limit,
-            arr_limit,
-            das: 0,
-            arr: 0,
+            das: Ticker::new(das_limit),
+            arr: Ticker::new(arr_limit),
         }
     }
+}
+
+#[derive(Debug, Default, Clone)]
+struct Ticker {
+    pub goal: u16,
+    pub value: u16,
 }
 
 #[derive(Debug)]
@@ -140,9 +142,9 @@ impl Game {
             .unwrap_or_else(|| self.bag.gen_mino(&mut self.rng));
     }
 
-    fn place(&mut self) {
+    fn hard_drop(&mut self) {
         self.bag.is_held = false;
-        while self.move_mino(MinoAction::Vertical(1)) {}
+        while self.move_mino(1, true) {}
         let old = self.mino;
         self.mino = self.bag.gen_mino(&mut self.rng);
 
@@ -209,15 +211,26 @@ impl Game {
             (_, false) => ori_code(from, mino.ori).map(|code| WALLKICKS[code].iter()),
             _ => ori_code_180(from, mino.ori).map(|code| WALLKICKS_180[code].iter()),
         };
-        let Some(tests) = tests else { return None };
         let orig_pos = mino.pos;
-        for &test in tests {
+        for &test in tests? {
             mino.pos = orig_pos + test;
             if mino.check_points(|p| self.board.check_block(p)) {
                 return Some(mino.pos);
             }
         }
         None
+    }
+
+    fn move_mino(&mut self, amount: i8, vert: bool) -> bool {
+        let prev = self.mino;
+
+        self.mino.pos = if vert {
+            self.try_move_mino(self.mino, 0, amount)
+        } else {
+            self.try_move_mino(self.mino, amount, 0)
+        };
+
+        prev.pos != self.mino.pos || self.calc_ghost()
     }
 
     fn try_move_mino(&mut self, mino: Mino, dx: i8, dy: i8) -> IPoint {
@@ -228,19 +241,6 @@ impl Game {
         } else {
             mino.pos
         }
-    }
-
-    fn move_mino(&mut self, ma: MinoAction) -> bool {
-        use MinoAction::*;
-
-        let prev = self.mino;
-
-        self.mino.pos = match ma {
-            Horizontal(x) => self.try_move_mino(self.mino, x, 0),
-            Vertical(y) => self.try_move_mino(self.mino, 0, y),
-        };
-
-        prev.pos != self.mino.pos || self.calc_ghost()
     }
 
     fn calc_ghost(&mut self) -> bool {
@@ -269,9 +269,9 @@ impl Game {
 
     fn move_dir(&mut self, left: Option<bool>) {
         if let Some(left) = left {
-            self.move_mino(MinoAction::Horizontal(if left { -1 } else { 1 }));
+            self.move_mino(if left { -1 } else { 1 }, false);
         } else {
-            self.move_mino(MinoAction::Vertical(1));
+            self.move_mino(1, true);
         }
     }
 
@@ -280,7 +280,7 @@ impl Game {
         if pressed {
             match action {
                 Hold => self.hold(),
-                Place => self.place(),
+                Place => self.hard_drop(),
                 Rotate180 => self.rotate(None),
                 RotateLeft => self.rotate(Some(true)),
                 RotateRight => self.rotate(Some(false)),
@@ -304,12 +304,16 @@ impl Game {
         }
     }
 
-    // TODO: use ticks instead of time
     pub fn tick(&mut self, now: Instant) -> bool {
         use TimeAction::*;
+        if self.try_move_mino(self.mino, 1, 0) != self.mino.pos {
+            if self.time.hard_drop.increment(self.mino.pos.y) {
+                self.hard_drop();
+            }
+        }
 
         (match self.time.tick(now) {
-            MinoAction(ma) => self.move_mino(ma),
+            Drop(amount) => self.move_mino(amount, true),
             Idle => false,
         }) || self.calc_ghost()
     }
@@ -319,8 +323,8 @@ impl Game {
         self.time.start = Instant::now();
     }
 
-    pub fn blocks<'a>(&'a self, y: u8) -> impl Iterator<Item = Option<Block>> + 'a {
-        self.board.0[y as usize].blocks().into_iter().copied()
+    pub fn blocks(&self, y: u8) -> impl Iterator<Item = Option<Block>> + '_ {
+        self.board.0[y as usize].blocks().iter().copied()
     }
     pub fn mino(&self) -> Mino {
         self.mino
@@ -404,16 +408,16 @@ impl Board {
         self.0[y as usize].block_mut(x)
     }
     pub fn check_block(&self, p: Point) -> bool {
-        return self.0.len() > p.y as usize
+        self.0.len() > p.y as usize
             && self.line(0).0.len() > p.x as usize
-            && self.block(p).is_none();
+            && self.block(p).is_none()
     }
     pub fn icheck_block(&self, p: IPoint) -> bool {
-        return p.x >= 0
+        p.x >= 0
             && p.y >= 0
             && self.0.len() > p.y as usize
             && self.line(0).0.len() > p.x as usize
-            && self.block(p).is_none();
+            && self.block(p).is_none()
     }
 }
 
@@ -465,14 +469,14 @@ fn random_minos(rng: &mut Xoshiro256Plus) -> [Block; 7] {
 impl GameTime {
     fn new(now: Instant) -> Self {
         Self {
-            // das_limit: 100,
             right: Timings::new(12, 0),
             left: Timings::new(12, 0),
             down: Timings::new(0, 0),
+            hard_drop: HardDrop::new(),
             start: now,
             now,
             gravity: 120,
-            next_gravity: 120,
+            grav_goal: 120,
             ticks: 0,
         }
     }
@@ -487,50 +491,95 @@ impl GameTime {
 
     fn reset_timing(&mut self, left: Option<bool>) {
         let timings = self.timings(left);
-        timings.das = 0;
-        timings.arr = 0;
+        timings.das.reset();
+        timings.arr.reset();
     }
 
     // TODO: fix move counting.
 
+    // TODO: consider copying jxtris.
     fn count_move(&mut self, left: Option<bool>) -> u8 {
         if let Some(left) = left {
             self.reset_timing(Some(!left));
         }
         let timings = self.timings(left);
-        timings.das += 1;
-        if timings.das < timings.das_limit {
-            timings.arr = 0;
-            return (timings.das == 1) as u8;
+        timings.das.tick();
+        if !timings.das.reached() {
+            timings.arr.reset();
+            return (timings.das.value == 1) as u8;
         }
-        timings.arr += 1;
+        timings.arr.tick();
 
         let amount;
-        if timings.arr_limit == 0 {
+        if timings.arr.goal == 0 {
             amount = u8::MAX as u16;
-            timings.arr = 0;
+            timings.arr.value = 0;
         } else {
-            amount = timings.arr / timings.arr_limit;
-            timings.arr %= timings.arr_limit;
+            amount = timings.arr.value / timings.arr.goal;
+            timings.arr.value %= timings.arr.goal;
         }
         u8::try_from(amount).unwrap_or(u8::MAX)
     }
 
     pub fn tick(&mut self, now: Instant) -> TimeAction {
-        // log::info!("{} {}", self.ticks, self.next_gravity);
         self.now = now;
         self.ticks += 1;
-        self.next_gravity += 1;
-        if self.next_gravity >= self.gravity {
+        self.grav_goal += 1;
+        if self.grav_goal >= self.gravity {
             let mut drop = 0;
-            while self.next_gravity >= self.gravity {
-                self.next_gravity -= self.gravity;
+            while self.grav_goal >= self.gravity {
+                self.grav_goal -= self.gravity;
                 drop += 1;
             }
-            TimeAction::MinoAction(MinoAction::Vertical(drop))
+            TimeAction::Drop(drop)
         } else {
             TimeAction::Idle
         }
+    }
+}
+
+impl Ticker {
+    pub fn new(goal: u16) -> Self {
+        Self {
+            goal,
+            ..Default::default()
+        }
+    }
+
+    fn tick(&mut self) {
+        self.value += 1;
+    }
+    fn reset(&mut self) {
+        self.value = 0;
+    }
+    fn reached(&mut self) -> bool {
+        self.value >= self.goal
+    }
+}
+
+impl HardDrop {
+    fn new() -> Self {
+        Self {
+            goal: 120 * 20,
+            scheduled: false,
+        }
+    }
+    fn increment(&mut self, y: i8) -> bool {
+        if !self.scheduled {
+            self.scheduled = true;
+            self.reset_goal(y);
+        }
+        self.goal -= 1;
+        if self.goal == 0 {
+            self.reset_goal(0);
+            true
+        } else {
+            false
+        }
+    }
+    fn reset_goal(&mut self, y: i8) {
+        self.goal = 120 * 24u8.saturating_sub(y.unsigned_abs()) as u32;
+        self.scheduled = false;
     }
 }
 

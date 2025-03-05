@@ -22,7 +22,7 @@ pub fn base_quads(
                 block_size,
             },
     }: &styling::Settings,
-    base_layer: &mut rend::Layer,
+    base_layer: &mut rend::QuadLayer,
 ) {
     let quad = quad(
         styling.bg2,
@@ -34,7 +34,11 @@ pub fn base_quads(
     base_layer.set_quads(vec![quad]);
 }
 
-pub fn game_quads(settings: &styling::Settings, game: &game::Game, game_layer: &mut rend::Layer) {
+pub fn game_quads(
+    settings: &styling::Settings,
+    game: &game::Game,
+    game_layer: &mut rend::QuadLayer,
+) {
     QDraw {
         settings,
         game,
@@ -47,7 +51,7 @@ pub fn game_quads(settings: &styling::Settings, game: &game::Game, game_layer: &
 struct QDraw<'a> {
     settings: &'a styling::Settings,
     game: &'a game::Game,
-    game_layer: &'a mut rend::Layer,
+    game_layer: &'a mut rend::QuadLayer,
     quads: Vec<super::rend::Quad>,
 }
 
@@ -73,7 +77,6 @@ impl QDraw<'_> {
                 },
         } = self.settings;
         self.quads.reserve(game::TOTAL_BLOCKS as usize);
-        // let mut quads = Vec::with_capacity(game::TOTAL_BLOCKS as usize);
         let mut cx = *game_x;
         let mut cy = *game_y;
 

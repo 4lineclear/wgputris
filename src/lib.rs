@@ -17,6 +17,8 @@ use winit::{
     window::{Window, WindowId},
 };
 
+use self::rend::ScreenSize;
+
 const RUNNING_ORDER: std::sync::atomic::Ordering = std::sync::atomic::Ordering::Relaxed;
 
 /// External actions
@@ -43,12 +45,13 @@ impl Action {
 pub struct State {
     // TODO: use an overarching 'GameState' struct instead of directly
     // handling the game struct.
-    rend: rend::QRend,
+    rend: rend::Rend,
     keys: mpsc::Sender<key::SentKey>,
     game: Arc<Mutex<game::Game>>,
-    window: Arc<Window>,
     settings: styling::Settings,
     ctx: Arc<Context>,
+    // NOTE: should be dropped last
+    window: Arc<Window>,
 }
 
 struct Context {
@@ -87,6 +90,7 @@ impl State {
         ctx: Arc<Context>,
     ) -> State {
         let size = window.inner_size();
+        let scale = window.scale_factor();
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
 
         let surface = instance.create_surface(window.clone()).unwrap();
@@ -108,10 +112,38 @@ impl State {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
-        let mut rend = rend::QRend::new(size.into(), device, queue, surface_format, surface);
+        let mut rend = rend::Rend::new(
+            ScreenSize::new(size, scale),
+            device,
+            queue,
+            surface_format,
+            surface,
+        );
 
-        rend.push_layer("base", rend.create_layer());
-        rend.push_layer("game", rend.create_layer());
+        rend.gen_text_layer(
+            glyphon::Metrics {
+                font_size: 24.0,
+                line_height: 36.0,
+            },
+            rend::TextLayerDesc {
+                name: "text",
+                attrs: None,
+                shaping: None,
+                left: 0.0,
+                top: 0.0,
+                scale: 1.0,
+                bounds: glyphon::TextBounds {
+                    left: 0,
+                    top: 0,
+                    right: size.width as i32,
+                    bottom: size.height as i32,
+                },
+                default_color: Some(glyphon::Color::rgb(0, 0, 0)),
+                custom_glyphs: Vec::new(),
+            },
+        );
+        rend.gen_quad_layer("base");
+        rend.gen_quad_layer("game");
 
         State {
             rend,
@@ -130,17 +162,21 @@ impl State {
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.settings.sizing.resize(new_size.width, new_size.height);
+            self.rend
+                .resize(ScreenSize::new(new_size, self.window.scale_factor()));
             self.draw();
-            self.rend.resize(new_size.into());
         }
     }
 
     fn draw(&mut self) {
-        if let Some(layer) = self.rend.get_layer_mut("game") {
+        if let Some(layer) = self.rend.get_quad_mut("game") {
             draw::game_quads(&self.settings, &self.game.lock().unwrap(), layer);
         }
-        if let Some(layer) = self.rend.get_layer_mut("base") {
+        if let Some(layer) = self.rend.get_quad_mut("base") {
             draw::base_quads(&self.settings, layer);
+        }
+        if let Some(layer) = self.rend.get_text_mut("text") {
+            layer.set_text("Hello, World!");
         }
     }
 
@@ -174,6 +210,7 @@ impl State {
             }));
         self.rend.queue.submit([encoder.finish()]);
         output.present();
+        self.rend.finish();
     }
 }
 
@@ -258,13 +295,14 @@ fn game_thread(
 ) {
     use std::ops::ControlFlow;
     let keys = key::KeyStore::default();
-    time::run::<(), _, _, _>(
+    time::run(
         move |action, _| {
             let mut game = game.lock().unwrap();
             for key in keyr.try_iter() {
                 if let Some((action, pressed)) = keys.apply_key(key.key, key.pressed) {
                     if action == Action::Exit {
                         ctx.run.store(RunState::EndScheduled, RUNNING_ORDER);
+                        return ControlFlow::Break(());
                     }
                     game.apply_action(action, pressed);
                 }
@@ -275,6 +313,9 @@ fn game_thread(
                     game.apply_action(action, true);
                 }
             }
+            if ctx.run.load(RUNNING_ORDER).ended() {
+                return ControlFlow::Break(());
+            }
             ControlFlow::Continue(())
         },
         move |_, _| {
@@ -282,32 +323,4 @@ fn game_thread(
         },
         120,
     );
-    // let mut timer = time::Timer::new(1200);
-    // let mut loops = 0;
-    // std::thread::spawn(move || loop {
-    //     let sleep_dur = timer.sleep_dur();
-    //     if !sleep_dur.is_zero() {
-    //         std::thread::sleep(sleep_dur);
-    //     }
-    //     let (_, action) = timer.tick();
-    //     for _ in 0..action.ticks {
-    //         // update game here
-    //     }
-    //     if action.render {
-    //         window.request_redraw();
-    //     }
-    //
-    //     log::info!(
-    //         "{loops}: tick drift: {}, render drift: {}, elapsed: {}, actual: {}",
-    //         timer.tick_drift(),
-    //         timer.render_drift(),
-    //         timer.elapsed().as_millis(),
-    //         timer.start().elapsed().as_millis(),
-    //     );
-    //
-    //     loops += 1;
-    //     if loops == 10000 {
-    //         break;
-    //     }
-    // });
 }
